@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  type RunDetail, TEMPER_HUES, apiErrorMessage, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
+  type RunDetail, TEMPER_HUES, apiErrorMessage, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
 } from "../web/render";
 import type { RunStatus } from "../src/store";
 
@@ -80,6 +80,15 @@ describe("flyoutHtml", () => {
 
   test("an in-progress run says so", () => {
     expect(flyoutHtml(run("testing"), names)).toContain("in progress");
+  });
+});
+
+describe("lockedHtml", () => {
+  test("lockedHtml links to the current stage", () => {
+    const html = lockedHtml("demo", { index: 2, name: "Respond <200>" });
+    expect(html).toContain('href="/r/demo/2"');
+    expect(html).toContain("Respond &lt;200&gt;");
+    expect(html).toContain("Locked");
   });
 });
 

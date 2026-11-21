@@ -1,7 +1,13 @@
 import type { Course, Stage } from "./course";
 
 export type StageStatus = "passed" | "failed";
-export type StageView = { stage: Stage; state: "done" | "current" | "upcoming"; lastResult: StageStatus | null };
+/** `locked`: not reached yet (after the current stage, never run), so its instructions stay hidden. */
+export type StageView = {
+  stage: Stage;
+  state: "done" | "current" | "upcoming";
+  lastResult: StageStatus | null;
+  locked: boolean;
+};
 type Latest = Map<string, StageStatus>;
 
 export function currentStageIndex(course: Course, latest: Latest): number | null {
@@ -15,6 +21,8 @@ export function stageViews(course: Course, latest: Latest): StageView[] {
     stage,
     state: current === null || stage.index < current ? "done" : stage.index === current ? "current" : "upcoming",
     lastResult: latest.get(stage.slug) ?? null,
+    // A stage with a result was reached once; a regression that moves current back does not lock it again.
+    locked: current !== null && stage.index > current && !latest.has(stage.slug),
   }));
 }
 

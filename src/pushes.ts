@@ -87,7 +87,7 @@ export async function handlePush(
           store.finishRun(run.id, outcome);
           finished = true;
           publish(run.id);
-          summarize(outcome, before);
+          summarize(outcome, before, branch);
         } catch (e) {
           if (!finished) {
             store.finishRun(run.id, {
@@ -102,7 +102,7 @@ export async function handlePush(
       return result;
     });
 
-  function summarize(outcome: RunOutcome, before: number | null): void {
+  function summarize(outcome: RunOutcome, before: number | null, branch: string): void {
     const labels: Partial<Record<RunStatus, string>> = {
       build_failed: "✘ Build failed (see the compile output above)",
       error: "✘ The run ended with an error (see the output above)",
@@ -114,6 +114,7 @@ export async function handlePush(
       if (r.status === "passed") emit(`✔ Stage ${stage.index}: ${stage.name}`);
       if (r.status === "failed") emit(`✘ Stage ${stage.index}: ${stage.name} — ${r.failureLine ?? "failed"}`);
     }
+    if (branch !== "main") emit(`Branch ${branch}: tested, but only pushes to main move progress.`);
     const after = currentStageIndex(course, store.latestStageResults(repoName));
     if (after === null) {
       emit("All stages pass.");

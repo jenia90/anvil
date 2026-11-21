@@ -46,6 +46,15 @@ describe("Store", () => {
     expect([...store.latestStageResults("demo")]).toEqual([["at4", "failed"], ["ia4", "passed"]]);
   });
 
+  test("latestStageResults ignores branches other than main", () => {
+    const store = new Store(":memory:");
+    const r1 = store.createRun("demo", "main", "a", []);
+    finish(store, r1.id, [result("at4", "failed")]);
+    const r2 = store.createRun("demo", "feature", "b", []);
+    finish(store, r2.id, [result("at4", "passed"), result("ia4", "passed")]);
+    expect([...store.latestStageResults("demo")]).toEqual([["at4", "failed"]]);
+  });
+
   test("latestStageResults ignores other repos", () => {
     const store = new Store(":memory:");
     const other = store.createRun("other", "main", "a", []);

@@ -126,6 +126,15 @@ describe("api", () => {
     expect(detail.latestRun.buildLog).toBeUndefined();
   });
 
+  test("locked stages have no instructions", async () => {
+    const { store, get } = await boot();
+    seed(store);
+    const { stages } = await (await get("/api/repos/demo")).json();
+    expect(stages.map((s: any) => s.locked)).toEqual([false, false, true]);
+    expect(stages[2].descriptionMd).toBe("");
+    expect(stages[1].descriptionMd).not.toBe("");
+  });
+
   test("stage text is rendered for the repo's language and extension stages carry their extension", async () => {
     const path = join(mkdtempSync(join(tmpdir(), "api-")), "anvil.yml");
     const repo = (name: string, language: string) => `  - name: ${name}\n    course: redis\n    language: ${language}\n`;

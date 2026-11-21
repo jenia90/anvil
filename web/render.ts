@@ -110,6 +110,13 @@ export function setupHtml(detail: { setupCommand: string; cloneCommand: string |
   )}</section>`;
 }
 
+/** Shown instead of a locked stage's instructions: the stage opens once the current one passes. */
+export function lockedHtml(repo: string, current: { index: number; name: string }): string {
+  return `<section class="locked-notice"><p><span aria-hidden="true">🔒</span> Locked: pass stage ${current.index} first.</p><a href="/r/${esc(
+    repo,
+  )}/${current.index}">Go to stage ${current.index}: ${esc(current.name)} →</a></section>`;
+}
+
 export type RepoListItem = {
   name: string;
   courseSlug: string;

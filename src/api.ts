@@ -107,8 +107,10 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse }:
         currentIndex: currentStageIndex(found.course, latest),
         stages: stageViews(found.course, latest).map((v) => ({
           index: v.stage.index, slug: v.stage.slug, name: v.stage.name, difficulty: v.stage.difficulty,
-          extension: v.stage.extension, descriptionMd: renderStageMd(v.stage.descriptionMd, found.repo.language),
-          state: v.state, lastResult: v.lastResult,
+          extension: v.stage.extension,
+          // Locked stages never send their text, so it cannot be read ahead from the page or the API.
+          descriptionMd: v.locked ? "" : renderStageMd(v.stage.descriptionMd, found.repo.language),
+          state: v.state, lastResult: v.lastResult, locked: v.locked,
         })),
         latestRun: run ? toSummary(run) : null,
       });

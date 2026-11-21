@@ -57,6 +57,14 @@ describe("handlePush", () => {
     expect(store.getRun(2)!.stagesRequested).toEqual(["at4", "ia4"]);
   });
 
+  test("a push to another branch says only main moves progress and leaves progress alone", async () => {
+    const { store, push } = await setup();
+    const out: string[] = [];
+    await withEnv({ FAKE_FAIL_AT: "2" }, () => push("demo", "feature", out));
+    expect(out.join("\n")).toContain("Branch feature: tested, but only pushes to main move progress.");
+    expect(store.latestStageResults("demo").size).toBe(0);
+  });
+
   test("baseline on a repo failing stage 2 makes stage 2 current and says why", async () => {
     const { store, push } = await setup();
     const out: string[] = [];

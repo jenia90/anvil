@@ -101,11 +101,12 @@ export class Store {
     return row ? toRun(row) : null;
   }
 
+  /** Newest result per stage on `main` only: pushes to scratch branches are tested but never move progress. */
   latestStageResults(repo: string): Map<string, StageStatus> {
     const rows = this.db
       .query<{ stage_slug: string; status: StageStatus }, [string]>(
         `SELECT sr.stage_slug, sr.status FROM stage_results sr JOIN runs r ON r.id = sr.run_id
-         WHERE r.repo = ? ORDER BY r.id ASC`,
+         WHERE r.repo = ? AND r.branch = 'main' ORDER BY r.id ASC`,
       )
       .all(repo);
     return new Map(rows.map((r) => [r.stage_slug, r.status]));

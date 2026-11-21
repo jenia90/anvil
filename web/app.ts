@@ -3,12 +3,12 @@ import type { RunSummary } from "../src/api";
 import type { Catalog, CatalogCourse } from "../src/catalog";
 import {
   type RepoListItem, type RunDetail, apiErrorMessage, courseHue, coursesHtml, esc, flyoutHtml, navHtml, progressHtml,
-  footerHtml, repoCardsHtml, setupHtml, sparksHtml, stripText,
+  footerHtml, lockedHtml, repoCardsHtml, setupHtml, sparksHtml, stripText,
 } from "./render";
 
 type StageInfo = {
   index: number; slug: string; name: string; difficulty: string; descriptionMd: string; extension: string | null;
-  state: "done" | "current" | "upcoming"; lastResult: "passed" | "failed" | null;
+  state: "done" | "current" | "upcoming"; lastResult: "passed" | "failed" | null; locked: boolean;
 };
 type RepoDetail = {
   name: string; course: { slug: string; name: string }; setupCommand: string; cloneCommand: string | null;
@@ -173,7 +173,7 @@ async function coursePage(slug: string): Promise<void> {
   };
 }
 
-const stageSymbol = (s: StageInfo) => (s.state === "done" ? "✓" : s.state === "current" ? "▶" : "");
+const stageSymbol = (s: StageInfo) => (s.locked ? "🔒" : s.state === "done" ? "✓" : s.state === "current" ? "▶" : "");
 
 async function stagePage(repo: string, requested: number | null): Promise<void> {
   let detail = await getJson<RepoDetail>(`/api/repos/${repo}`);
@@ -181,8 +181,6 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
   if (requested === null) history.replaceState(null, "", `/r/${repo}/${index}`);
   const stage = detail.stages.find((s) => s.index === index) ?? detail.stages[0];
   const names = () => new Map(detail.stages.map((s) => [s.index, s.name] as const));
-  const prev = detail.stages.find((s) => s.index === stage.index - 1);
-  const next = detail.stages.find((s) => s.index === stage.index + 1);
   const meta = [`Stage ${stage.index} of ${detail.stages.length}`, stage.extension, difficultyLabel(stage.difficulty)]
     .filter((m): m is string => Boolean(m))
     .map(esc)
@@ -195,10 +193,7 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
         <p class="crumbs"><a href="/">My repos</a> / <a href="/courses/${esc(detail.course.slug)}">${esc(detail.course.name)}</a> / ${esc(detail.name)}</p>
         <div id="setup"></div>
         <header class="stage-head"><p class="eyebrow">${meta}</p><h1>${esc(stage.name)}</h1></header>
-        <article class="markdown">${md(stage.descriptionMd || "_This course definition has no instructions for this stage._")}</article>
-        <nav class="stage-nav">${prev ? `<a href="/r/${esc(repo)}/${prev.index}">← ${esc(prev.name)}</a>` : "<span></span>"}${
-          next ? `<a href="/r/${esc(repo)}/${next.index}">${esc(next.name)} →</a>` : ""
-        }</nav>
+        <div id="stage-body"></div>
       </main>
     </div>
     <button id="run-strip" type="button" aria-controls="flyout"></button>
@@ -208,7 +203,23 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
   const strip = document.getElementById("run-strip")!;
   const flyout = document.getElementById("flyout")!;
   const setup = document.getElementById("setup")!;
+  const body = document.getElementById("stage-body")!;
   let latest = detail.latestRun;
+
+  // Instructions (or the locked notice) and the prev/next links; re-rendered when a run unlocks stages.
+  const renderBody = () => {
+    const at = (i: number) => detail.stages.find((s) => s.index === i);
+    const shown = at(stage.index) ?? stage;
+    const [prev, next, current] = [at(stage.index - 1), at(stage.index + 1), at(detail.currentIndex ?? 0)];
+    body.innerHTML = `${
+      shown.locked && current
+        ? lockedHtml(repo, current)
+        : `<article class="markdown">${md(shown.descriptionMd || "_This course definition has no instructions for this stage._")}</article>`
+    }
+        <nav class="stage-nav">${prev ? `<a href="/r/${esc(repo)}/${prev.index}">← ${esc(prev.name)}</a>` : "<span></span>"}${
+          !next ? "" : next.locked ? `<span class="locked">🔒 ${esc(next.name)}</span>` : `<a href="/r/${esc(repo)}/${next.index}">${esc(next.name)} →</a>`
+        }</nav>`;
+  };
 
   const renderList = () => {
     const passed = detail.stages.filter((s) => s.lastResult === "passed").length;
@@ -219,9 +230,12 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
         (s, i) =>
           // Extension stages follow the base stages; each extension gets a heading where it starts.
           (s.extension && s.extension !== detail.stages[i - 1]?.extension ? `<h3 class="extension">${esc(s.extension)}</h3>` : "") +
-          `<a href="/r/${esc(repo)}/${s.index}" class="stage ${s.state}${s.index === stage.index ? " selected" : ""}${
-            s.lastResult === "failed" ? " failed" : ""
-          }"${s.index === stage.index ? ' aria-current="page"' : ""}><span class="dot">${stageSymbol(s)}</span><span class="n">${s.index}</span><span class="name">${esc(s.name)}</span></a>`,
+          (s.locked
+            ? // Locked stages are not links: their instructions open once the current stage passes.
+              `<span class="stage locked${s.index === stage.index ? " selected" : ""}" aria-disabled="true"><span class="dot" aria-label="locked">${stageSymbol(s)}</span><span class="n">${s.index}</span><span class="name">${esc(s.name)}</span></span>`
+            : `<a href="/r/${esc(repo)}/${s.index}" class="stage ${s.state}${s.index === stage.index ? " selected" : ""}${
+                s.lastResult === "failed" ? " failed" : ""
+              }"${s.index === stage.index ? ' aria-current="page"' : ""}><span class="dot">${stageSymbol(s)}</span><span class="n">${s.index}</span><span class="name">${esc(s.name)}</span></a>`),
       )
       .join("")}</div>`;
     list.querySelector(".selected")?.scrollIntoView({ block: "center" });
@@ -258,6 +272,7 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
   });
 
   renderList();
+  renderBody();
   renderStrip();
 
   const source = new EventSource(`/api/repos/${repo}/events`);
@@ -265,8 +280,11 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
     latest = JSON.parse((e as MessageEvent).data) as RunSummary;
     renderStrip();
     if (["passed", "failed", "build_failed", "error"].includes(latest.status)) {
+      const wasLocked = detail.stages.map((s) => s.locked).join();
       detail = await getJson<RepoDetail>(`/api/repos/${repo}`);
       renderList();
+      // Only when a lock changed: re-rendering the instructions would reset the reader's scroll and selection.
+      if (detail.stages.map((s) => s.locked).join() !== wasLocked) renderBody();
     }
     if (!flyout.hidden) await renderFlyout();
   });

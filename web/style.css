@@ -297,12 +297,18 @@ a.card:hover::before, .course-card:hover::before { background: var(--heat); opac
 .stage.current .dot { border-color: var(--hue-color); color: var(--hue-color); font-size: 7px; box-shadow: 0 0 0 4px var(--hue-soft); }
 .stage.failed .dot { border-color: var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
 .stage.selected { background: var(--hue-soft); color: var(--fg-strong); box-shadow: inset 2px 0 0 var(--hue-color); }
+.stage.locked { cursor: default; opacity: .6; }
+.stage.locked:hover { background: none; color: var(--muted); }
+.stage.locked .dot { border-style: dashed; color: var(--muted); font-size: 9px; }
 #instructions { padding: 32px 48px; max-width: 900px; width: 100%; }
 .stage-head { margin: 8px 0 18px; }
 .stage-head h1 { font-size: clamp(26px, 3.4vw, 36px); margin: 6px 0 0; font-weight: 800; letter-spacing: -.03em; }
 .stage-head .eyebrow { color: var(--hue-color); }
 .stage-nav { display: flex; justify-content: space-between; gap: 16px; margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); }
 .stage-nav a { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--fg); background: var(--surface-2); font-size: 14px; }
+.stage-nav .locked { padding: 10px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 14px; }
+.locked-notice { margin: 8px 0 26px; padding: 18px 20px; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--surface-2); }
+.locked-notice p { margin: 0 0 8px; color: var(--fg-strong); font-weight: 600; }
 .stage-nav a:hover { border-color: var(--hue-color); text-decoration: none; }
 
 /* Setup terminal (dark in both themes, like a real terminal) */
