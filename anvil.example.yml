@@ -12,3 +12,8 @@ repos:
 # courses:
 #   - definition: /path/to/build-your-own-redis   # a course repo folder, or a single-file course_definition.yml
 #     tester: /path/to/tester                     # the tester binary; TESTER_DIR is set to its folder
+# Optional: hints for failed stages (see README). Any command that reads a prompt on stdin and prints a hint.
+# hint:
+#   command: claude -p          # the default when claude is installed; e.g. ollama run qwen2.5-coder for local
+#   maxPromptKB: 150            # the whole prompt's size; lower it for small local models
+# hint: false                   # turn hints off

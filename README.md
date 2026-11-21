@@ -37,7 +37,7 @@ bun run start                          # or: bun run src/main.ts path/to/config.
 ```
 
 `anvil.yml` is gitignored, so your local paths stay out of the repo. See `anvil.example.yml` for every setting
-(`port`, `dataDir`, `repos`, `courses`).
+(`port`, `dataDir`, `url`, `repos`, `courses`, `hint`).
 
 Each repo names a course slug (the `<slug>` in `build-your-own-<slug>`) and the language you are using:
 
