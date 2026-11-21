@@ -1,7 +1,7 @@
 import index from "../web/index.html";
 import { type ApiDeps, apiRoutes } from "./api";
-import { serveGit } from "./git-remote";
-import { type PushDeps, UnknownRepoError, handlePush, parseRefUpdates } from "./pushes";
+import { mainHead, serveGit } from "./git-remote";
+import { type PushDeps, RunRequestError, UnknownRepoError, handlePush, parseRefUpdates, startRun } from "./pushes";
 import { join } from "node:path";
 
 export type ServerDeps = PushDeps & {
@@ -9,6 +9,8 @@ export type ServerDeps = PushDeps & {
   hookToken: string;
   catalog: ApiDeps["catalog"];
   startCourse: ApiDeps["startCourse"];
+  /** Replaces the re-run starter (tests); by default it runs the head of main. */
+  startRun?: ApiDeps["startRun"];
 };
 
 export function startServer(deps: ServerDeps): { port: number; hostname: string; stop(): void } {
@@ -19,12 +21,17 @@ export function startServer(deps: ServerDeps): { port: number; hostname: string;
     const repo = req.params.repo;
     if (!deps.config.repos.some((r) => r.name === repo)) return new Response("unknown repo\n", { status: 404 });
     const updates = parseRefUpdates(await req.text());
+    const options = [...req.headers.entries()]
+      .map(([k, v]) => [/^x-anvil-push-option-(\d+)$/.exec(k)?.[1], v] as const)
+      .filter((e): e is readonly [string, string] => e[0] !== undefined)
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([, v]) => v);
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
           try {
-            await handlePush(deps, repo, updates, (line) => controller.enqueue(encoder.encode(`${line}\n`)));
+            await handlePush(deps, repo, updates, (line) => controller.enqueue(encoder.encode(`${line}\n`)), options);
           } catch (e) {
             const message = e instanceof UnknownRepoError ? e.message : `run failed: ${e}`;
             controller.enqueue(encoder.encode(`anvil: ${message}\n`));
@@ -57,6 +64,16 @@ export function startServer(deps: ServerDeps): { port: number; hostname: string;
   const routes = apiRoutes({
     config: deps.config, store: deps.store, events: deps.events, port: () => actualPort,
     catalog: deps.catalog, startCourse: deps.startCourse,
+    startRun:
+      deps.startRun ??
+      ((repo, stage) => {
+        if (!deps.config.repos.some((r) => r.name === repo)) throw new UnknownRepoError(repo);
+        const sha = mainHead(deps.dataDir, repo);
+        if (!sha) throw new RunRequestError("push your code first", 409);
+        const { runId, done } = startRun(deps, repo, { branch: "main", sha, stage }, () => {});
+        done.catch(() => {}); // the run records its own failure
+        return { runId };
+      }),
   });
   const api = Object.fromEntries(
     Object.entries(routes).map(([path, handler]) => [

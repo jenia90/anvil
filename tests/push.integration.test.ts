@@ -37,11 +37,11 @@ async function boot() {
   return { server, store, dataDir, workDir, url: remoteUrl(`http://127.0.0.1:${server.port}`, "demo") };
 }
 
-async function push(workDir: string, url: string, env: Record<string, string> = {}) {
+async function push(workDir: string, url: string, env: Record<string, string> = {}, options: string[] = []) {
   const saved = { ...process.env };
   Object.assign(process.env, env);
   try {
-    const p = Bun.spawn(["git", "push", url, "HEAD:refs/heads/main"], { cwd: workDir, stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawn(["git", "push", ...options.flatMap((o) => ["-o", o]), url, "HEAD:refs/heads/main"], { cwd: workDir, stdout: "pipe", stderr: "pipe" });
     const [stderr, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
     return { stderr, code };
   } finally {
@@ -63,6 +63,7 @@ describe("ensureBareRepo", () => {
     expect(statSync(hook).mode & 0o100).not.toBe(0);
     expect(statSync(hook).mode & 0o077).toBe(0);
     expect(git(dir, "config", "http.receivepack")).toBe("true");
+    expect(git(dir, "config", "receive.advertisePushOptions")).toBe("true");
   });
 });
 
@@ -91,6 +92,45 @@ describe("git push to the app", () => {
     const { code } = await push(workDir, url);
     expect(code).toBe(0);
     expect(store.latestRun("demo")!.status).toBe("passed");
+  });
+
+  test("git push -o stage=1 runs only stage 1", async () => {
+    const { workDir, url, store } = await boot();
+    const { stderr, code } = await push(workDir, url, {}, ["stage=1"]);
+    expect(code).toBe(0);
+    expect(stderr).toContain("Stage 1: Bind to a port");
+    expect(store.latestRun("demo")!.stagesRequested).toEqual(["at4"]);
+  });
+
+  test("a carriage return in a push option does not lose the push", async () => {
+    const { workDir, url, store } = await boot();
+    const { code } = await push(workDir, url, {}, ["stage=1\r"]);
+    expect(code).toBe(0);
+    expect(store.latestRun("demo")!.stagesRequested).toEqual(["at4"]);
+  });
+
+  test("git push -o stage=9 says no such stage", async () => {
+    const { workDir, url, store } = await boot();
+    const { stderr, code } = await push(workDir, url, {}, ["stage=9"]);
+    expect(code).toBe(0);
+    expect(stderr).toContain("anvil: no stage 9 in this course (1–3)");
+    expect(store.latestRun("demo")).toBeNull();
+  });
+
+  test("server-wired re-run tests the head of main", async () => {
+    const { workDir, url, store, server } = await boot();
+    const api = `http://127.0.0.1:${server.port}/api/repos/demo/runs`;
+    const post = () => fetch(api, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect((await post()).status).toBe(409); // nothing pushed yet
+    await push(workDir, url);
+    const res = await post();
+    expect(res.status).toBe(202);
+    const { runId } = await res.json();
+    while (!["passed", "failed", "build_failed", "error"].includes(store.getRun(runId)!.status)) await Bun.sleep(20);
+    const [first, rerun] = [store.getRun(runId - 1)!, store.getRun(runId)!];
+    expect(rerun.commitSha).toBe(first.commitSha);
+    expect(rerun.branch).toBe("main");
+    expect(rerun.status).toBe("passed");
   });
 
   test("the server listens on 127.0.0.1 only", async () => {

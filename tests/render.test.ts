@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-  type RunDetail, TEMPER_HUES, apiErrorMessage, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
+  type RunDetail, TEMPER_HUES, advanceOf, apiErrorMessage, faviconHref, followRun, keyAction, liveLineText, liveLogHtml,
+  notificationText, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
 } from "../web/render";
+import type { RunSummary } from "../src/api";
 import type { RunStatus } from "../src/store";
 
 const names = new Map([[1, "Bind to a port"], [2, "Respond with 200"], [3, "Extract URL path"]]);
@@ -254,5 +256,132 @@ describe("footerHtml", () => {
     expect(html).toContain("not affiliated with CodeCrafters");
     expect(html).toContain('href="https://github.com/codecrafters-io"');
     expect(html).toContain('href="https://codecrafters.io"');
+  });
+});
+
+const summary = (id: number, status: RunStatus): RunSummary => {
+  const { buildLog: _b, testerLog: _t, stageResults: _s, ...rest } = run(status, { id });
+  return rest;
+};
+const stagesList = [{ index: 1, name: "Bind to a port" }, { index: 2, name: "Respond with 200" }, { index: 3, name: "Extract URL path" }];
+
+describe("followRun", () => {
+  test("followRun keeps the newest id", () => {
+    expect(followRun(null, summary(3, "queued"))!.id).toBe(3);
+    expect(followRun(summary(3, "queued"), summary(2, "testing"))!.id).toBe(3);
+    expect(followRun(summary(3, "queued"), summary(3, "testing"))!.status).toBe("testing");
+    expect(followRun(summary(3, "passed"), summary(4, "queued"))!.id).toBe(4);
+  });
+});
+
+describe("titlePrefix", () => {
+  test("marks running, passed and failed runs", () => {
+    expect(titlePrefix(null)).toBe("");
+    for (const s of ["queued", "building", "testing"] as const) expect(titlePrefix(summary(1, s))).toBe("⏳ ");
+    expect(titlePrefix(summary(1, "passed"))).toBe("✓ ");
+    for (const s of ["failed", "build_failed", "error"] as const) expect(titlePrefix(summary(1, s))).toBe("✗ ");
+  });
+});
+
+describe("faviconHref", () => {
+  test("is null without a run and a data URL with the status colour otherwise", () => {
+    expect(faviconHref(null)).toBeNull();
+    const colour = (s: RunStatus) => decodeURIComponent(faviconHref(summary(1, s))!);
+    expect(colour("testing")).toStartWith("data:image/svg+xml,");
+    expect(colour("testing")).toContain("#f59e0b");
+    expect(colour("passed")).toContain("#22c55e");
+    expect(colour("build_failed")).toContain("#ef4444");
+  });
+});
+
+describe("advanceOf", () => {
+  test("is the last passed stage and the next one when current moved forward", () => {
+    expect(advanceOf(2, 3, stagesList)).toEqual({ passed: 2, next: { index: 3, name: "Extract URL path" } });
+    expect(advanceOf(1, 3, stagesList)).toEqual({ passed: 2, next: { index: 3, name: "Extract URL path" } });
+  });
+
+  test("completing the course has no next stage", () => {
+    expect(advanceOf(3, null, stagesList)).toEqual({ passed: 3, next: null });
+  });
+
+  test("is null when current did not move forward or the course was already complete", () => {
+    expect(advanceOf(2, 2, stagesList)).toBeNull();
+    expect(advanceOf(3, 1, stagesList)).toBeNull();
+    expect(advanceOf(null, null, stagesList)).toBeNull();
+  });
+});
+
+describe("notificationText", () => {
+  const failing = run("failed", {
+    stageResults: [{ runId: 1, stageSlug: "ia4", stageIndex: 2, status: "failed", log: "", failureLine: "got 404" }],
+  });
+  test("titles carry the repo and the result", () => {
+    expect(notificationText("demo", run("passed"), names, null).title).toBe("demo: Passed");
+    expect(notificationText("demo", failing, names, null).title).toBe("demo: Failed");
+    expect(notificationText("demo", run("build_failed"), names, null).title).toBe("demo: Build failed");
+    expect(notificationText("demo", run("error"), names, null).title).toBe("demo: Error");
+  });
+
+  test("bodies say what happened", () => {
+    const next = { passed: 1, next: { index: 2, name: "Respond with 200" } };
+    expect(notificationText("demo", run("passed"), names, next).body).toBe("Stage 1 passed — on to stage 2: Respond with 200");
+    expect(notificationText("demo", run("passed"), names, { passed: 3, next: null }).body).toBe("Course complete");
+    expect(notificationText("demo", run("passed"), names, null).body).toBe("All tests passed");
+    expect(notificationText("demo", failing, names, null).body).toBe("Stage 2 failed: got 404");
+    expect(notificationText("demo", run("build_failed"), names, null).body).toBe("Build failed");
+    expect(notificationText("demo", run("error"), names, null).body).toBe("The run ended with an error");
+  });
+});
+
+describe("toastHtml", () => {
+  test("links to the next stage, escaped", () => {
+    const html = toastHtml("demo", { passed: 1, next: { index: 2, name: "Respond <200>" } });
+    expect(html).toContain("Stage 1 passed");
+    expect(html).toContain('href="/r/demo/2"');
+    expect(html).toContain("On to stage 2: Respond &lt;200&gt; →");
+  });
+
+  test("celebrates a completed course", () => {
+    expect(toastHtml("demo", { passed: 3, next: null })).toContain("Course complete 🎉");
+  });
+});
+
+describe("live log", () => {
+  test("liveLogHtml renders ANSI colour and escapes", () => {
+    const html = liveLogHtml(["\x1b[31mred\x1b[0m", "<b>"]);
+    expect(html).toStartWith('<pre class="log live">');
+    expect(html).toContain("&lt;b&gt;");
+    expect(html).not.toContain("\x1b");
+  });
+
+  test("liveLineText strips ANSI and trims", () => {
+    expect(liveLineText("  \x1b[32m[stage-1] ok\x1b[0m  ")).toBe("[stage-1] ok");
+  });
+});
+
+describe("keyAction", () => {
+  const key = (k: string, over: Partial<Parameters<typeof keyAction>[0]> = {}) =>
+    keyAction({ key: k, ctrlKey: false, metaKey: false, altKey: false, editable: false, ...over });
+
+  test("maps the shortcut table", () => {
+    expect(["j", "ArrowRight", "k", "ArrowLeft", "l", "r", "t", "?", "Escape"].map((k) => key(k))).toEqual([
+      "next", "next", "prev", "prev", "flyout", "rerun", "test", "help", "escape",
+    ]);
+    expect(key("x")).toBeNull();
+  });
+
+  test("keyAction ignores editable targets and modifiers", () => {
+    expect(key("j", { editable: true })).toBeNull();
+    expect(key("r", { ctrlKey: true })).toBeNull();
+    expect(key("r", { metaKey: true })).toBeNull();
+    expect(key("t", { altKey: true })).toBeNull();
+    expect(key("Escape", { editable: true })).toBe("escape");
+  });
+});
+
+describe("shortcutsHtml", () => {
+  test("lists every shortcut", () => {
+    const html = shortcutsHtml();
+    for (const k of ["j", "k", "l", "r", "t", "?", "Esc"]) expect(html).toContain(`<kbd>${k}</kbd>`);
   });
 });

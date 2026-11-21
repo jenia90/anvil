@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Catalog, CatalogCourse } from "../src/catalog";
 import { loadConfig } from "../src/config";
+import { RunRequestError } from "../src/pushes";
 import { StartCourseError } from "../src/start-course";
 import { makeFixtureRepo } from "./helpers";
 import { RunEvents } from "../src/events";
@@ -26,6 +27,7 @@ const sampleCatalog: Catalog = { fetchedAt: 1, stale: false, courses: [sampleCou
 type BootOptions = {
   catalog?: () => Promise<Catalog>;
   startCourse?: (course: string, language: string) => Promise<{ name: string; cloneUrl: string }>;
+  startRun?: (repo: string, stage: number | undefined) => { runId: number };
 };
 
 async function boot(configPath = join(import.meta.dir, "fixtures/config.yml"), opts: BootOptions = {}) {
@@ -42,6 +44,7 @@ async function boot(configPath = join(import.meta.dir, "fixtures/config.yml"), o
         started.push(`${course}-${language}`);
         return { name: `${course}-${language}`, cloneUrl: `http://x/git/${course}-${language}.git` };
       }),
+    startRun: opts.startRun,
   });
   stops.push(server.stop);
   const get = (path: string) => fetch(`http://127.0.0.1:${server.port}${path}`);
@@ -323,5 +326,81 @@ describe("repo detail clone command", () => {
 
     const other = await rawRequest(port, "GET /api/repos HTTP/1.1\r\nHost: other.tail1.ts.net\r\nConnection: close\r\n\r\n");
     expect(other.startsWith("HTTP/1.1 403")).toBe(true);
+  });
+
+  test("POST runs starts a run and returns 202 with its id", async () => {
+    const calls: [string, number | undefined][] = [];
+    const { post } = await boot(undefined, { startRun: (repo, stage) => (calls.push([repo, stage]), { runId: 42 }) });
+    const res = await post("/api/repos/demo/runs", {});
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ runId: 42 });
+    expect(calls).toEqual([["demo", undefined]]);
+  });
+
+  test("POST runs passes the stage", async () => {
+    const calls: (number | undefined)[] = [];
+    const { post } = await boot(undefined, { startRun: (_r, stage) => (calls.push(stage), { runId: 1 }) });
+    await post("/api/repos/demo/runs", { stage: 2 });
+    expect(calls).toEqual([2]);
+  });
+
+  test("POST runs maps RunRequestError to its status", async () => {
+    const { post } = await boot(undefined, {
+      startRun: (_r, stage) => {
+        throw stage === 3 ? new RunRequestError("stage 3 is locked; pass stage 2 first", 409) : new RunRequestError("no stage 9 in this course (1–3)", 400);
+      },
+    });
+    const locked = await post("/api/repos/demo/runs", { stage: 3 });
+    expect(locked.status).toBe(409);
+    expect((await locked.json()).error).toBe("stage 3 is locked; pass stage 2 first");
+    expect((await post("/api/repos/demo/runs", { stage: 9 })).status).toBe(400);
+  });
+
+  test("POST runs rejects a stage that is not a number and an unknown repo", async () => {
+    const { post } = await boot(undefined, { startRun: () => ({ runId: 1 }) });
+    expect((await post("/api/repos/demo/runs", { stage: "2" })).status).toBe(400);
+    expect((await post("/api/repos/nope/runs", {})).status).toBe(404);
+  });
+
+  test("POST runs needs JSON", async () => {
+    const { port } = await boot(undefined, { startRun: () => ({ runId: 1 }) });
+    const res = await fetch(`http://127.0.0.1:${port}/api/repos/demo/runs`, { method: "POST", body: "{}" });
+    expect(res.status).toBe(415);
+  });
+
+  test("repo detail says whether it can run", async () => {
+    const { get } = await boot();
+    expect((await (await get("/api/repos/demo")).json()).canRun).toBe(false);
+  });
+
+  test("SSE replays buffered lines of unfinished runs", async () => {
+    const { store, events, get } = await boot();
+    const run = store.createRun("demo", "main", "abc1234def", []);
+    events.publishLine({ repo: "demo", runId: run.id, line: "first" });
+    events.publishLine({ repo: "demo", runId: run.id, line: "second" });
+    const res = await get("/api/repos/demo/events");
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (!text.includes('"second"')) text += decoder.decode((await reader.read()).value);
+    const logs = text.split("\n\n").filter((c) => c.startsWith("event: log"));
+    expect(logs.map((c) => JSON.parse(c.split("data: ")[1]))).toEqual([
+      { runId: run.id, line: "first" }, { runId: run.id, line: "second" },
+    ]);
+    await reader.cancel();
+  });
+
+  test("SSE forwards new log lines", async () => {
+    const { store, events, get } = await boot();
+    const run = store.createRun("demo", "main", "abc1234def", []);
+    const res = await get("/api/repos/demo/events");
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    expect(decoder.decode((await reader.read()).value)).toContain("event: run");
+    events.publishLine({ repo: "demo", runId: run.id, line: "live" });
+    const next = decoder.decode((await reader.read()).value);
+    expect(next).toContain("event: log");
+    expect(JSON.parse(next.split("data: ")[1])).toEqual({ runId: run.id, line: "live" });
+    await reader.cancel();
   });
 });

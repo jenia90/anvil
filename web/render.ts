@@ -3,6 +3,7 @@ import { ansiToHtml, stripAnsi } from "../src/ansi";
 import type { RunSummary } from "../src/api";
 import type { Catalog } from "../src/catalog";
 import type { RunRecord, RunStatus, StageResultRecord } from "../src/store";
+import { FINISHED } from "../src/events";
 
 export type RunDetail = RunRecord & { stageResults: (StageResultRecord & { stageIndex: number })[] };
 
@@ -204,4 +205,92 @@ export function flyoutHtml(run: RunDetail, stageNames: Map<number, string>): str
         )
         .join("");
   }
+}
+
+/** The run the stage page follows: the newest by id, so an older run's updates never take over the page. */
+export function followRun(current: RunSummary | null, incoming: RunSummary): RunSummary | null {
+  return current === null || incoming.id >= current.id ? incoming : current;
+}
+
+export function titlePrefix(run: RunSummary | null): string {
+  if (!run) return "";
+  if (!FINISHED.has(run.status)) return "⏳ ";
+  return run.status === "passed" ? "✓ " : "✗ ";
+}
+
+/** The anvil icon with a status dot, as a data URL; null when there is no run (the page keeps its own icon). */
+export function faviconHref(run: RunSummary | null): string | null {
+  if (!run) return null;
+  const dot = !FINISHED.has(run.status) ? "#f59e0b" : run.status === "passed" ? "#22c55e" : "#ef4444";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1d1b19"/><g transform="translate(6.4 20) scale(1.6)"><path fill="#ff8a24" d="M0 3.5 7 2h23v4.5h-5c-2.5.5-3.5 2-3.5 4V12l3.5 2.5V17H9v-2.5l3.5-2.5v-1.5c0-2-1.5-3.5-4.5-4C5 6 2 5 0 3.5Z"/></g><circle cx="50" cy="14" r="11" fill="${dot}" stroke="#1d1b19" stroke-width="3"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+export type Advance = { passed: number; next: { index: number; name: string } | null };
+
+/** How a run moved the current stage: null unless it moved forward (or completed the course). */
+export function advanceOf(before: number | null, after: number | null, stages: { index: number; name: string }[]): Advance | null {
+  if (before === null || (after !== null && after <= before)) return null;
+  const passed = (after ?? stages.length + 1) - 1;
+  const next = after === null ? null : stages.find((s) => s.index === after);
+  return { passed, next: next ? { index: next.index, name: next.name } : null };
+}
+
+export function notificationText(
+  repo: string, run: RunDetail, names: Map<number, string>, advance: Advance | null,
+): { title: string; body: string } {
+  const title = `${repo}: ${LABELS[run.status].replace("…", "")}`;
+  const failed = run.stageResults.find((r) => r.status === "failed");
+  const body =
+    run.status === "passed"
+      ? advance === null
+        ? "All tests passed"
+        : advance.next
+          ? `Stage ${advance.passed} passed — on to stage ${advance.next.index}: ${advance.next.name}`
+          : "Course complete"
+      : run.status === "failed" && failed
+        ? `Stage ${failed.stageIndex} failed: ${failed.failureLine ?? names.get(failed.stageIndex) ?? failed.stageSlug}`
+        : run.status === "build_failed"
+          ? "Build failed"
+          : "The run ended with an error";
+  return { title, body };
+}
+
+export function toastHtml(repo: string, advance: Advance): string {
+  if (!advance.next) return `<div class="toast" role="status"><strong>Course complete 🎉</strong></div>`;
+  return `<div class="toast" role="status"><strong>Stage ${advance.passed} passed</strong><a href="/r/${esc(repo)}/${
+    advance.next.index
+  }">On to stage ${advance.next.index}: ${esc(advance.next.name)} →</a></div>`;
+}
+
+export function liveLogHtml(lines: string[]): string {
+  return `<pre class="log live">${lines.map(ansiToHtml).join("\n")}</pre>`;
+}
+
+/** A log line as one line of plain text, for the strip. */
+export function liveLineText(line: string): string {
+  return stripAnsi(line).trim();
+}
+
+export type KeyAction = "next" | "prev" | "flyout" | "rerun" | "test" | "help" | "escape";
+const KEYS: Record<string, KeyAction> = {
+  j: "next", ArrowRight: "next", k: "prev", ArrowLeft: "prev", l: "flyout", r: "rerun", t: "test", "?": "help",
+};
+
+/** The stage page shortcut for a key press; typing in a field or holding a modifier is never a shortcut. */
+export function keyAction(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; editable: boolean }): KeyAction | null {
+  if (e.key === "Escape") return "escape";
+  if (e.editable || e.ctrlKey || e.metaKey || e.altKey) return null;
+  return KEYS[e.key] ?? null;
+}
+
+export function shortcutsHtml(): string {
+  const rows: [string, string][] = [
+    ["<kbd>j</kbd> <kbd>→</kbd>", "Next stage"], ["<kbd>k</kbd> <kbd>←</kbd>", "Previous stage"],
+    ["<kbd>l</kbd>", "Run details"], ["<kbd>r</kbd>", "Re-run"], ["<kbd>t</kbd>", "Test this stage"],
+    ["<kbd>?</kbd>", "This list"], ["<kbd>Esc</kbd>", "Close"],
+  ];
+  return `<div class="shortcuts" role="dialog" aria-label="Keyboard shortcuts"><h3>Keyboard shortcuts</h3><dl>${rows
+    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+    .join("")}</dl></div>`;
 }

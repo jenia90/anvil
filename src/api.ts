@@ -1,9 +1,10 @@
 import type { Catalog } from "./catalog";
 import { type Config, appUrl } from "./config";
-import type { RunEvents } from "./events";
-import { hasCommits, remoteUrl } from "./git-remote";
+import type { LogEvent, RunEvents } from "./events";
+import { hasCommits, mainHead, remoteUrl } from "./git-remote";
 import { renderStageMd } from "./course";
 import { currentStageIndex, stageViews } from "./progress";
+import { RunRequestError, UnknownRepoError } from "./pushes";
 import { StartCourseError } from "./start-course";
 import type { RunRecord, Store } from "./store";
 
@@ -15,6 +16,8 @@ export type ApiDeps = {
   port: () => number;
   catalog: { get(): Promise<Catalog> };
   startCourse: (course: string, language: string) => Promise<{ name: string; cloneUrl: string }>;
+  /** Runs the head of main again: all stages up to the current one, or only `stage`. */
+  startRun: (repo: string, stage: number | undefined) => { runId: number };
 };
 
 export const toSummary = ({ buildLog: _b, testerLog: _t, ...rest }: RunRecord): RunSummary => rest;
@@ -24,7 +27,7 @@ const notFound = (what: string) => json({ error: `unknown ${what}` }, 404);
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function apiRoutes({ config, store, events, port, catalog, startCourse }: ApiDeps) {
+export function apiRoutes({ config, store, events, port, catalog, startCourse, startRun }: ApiDeps) {
   // A repo's remote never loses its commits, so once seen they need no further git call.
   const seeded = new Set<string>();
   const hasCommitsCached = (name: string) => {
@@ -104,6 +107,7 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse }:
         cloneCommand: hasCommitsCached(found.repo.name)
           ? `git clone ${url} codecrafters-${found.repo.course}-${found.repo.language}`
           : null,
+        canRun: mainHead(config.dataDir, found.repo.name) !== null,
         currentIndex: currentStageIndex(found.course, latest),
         stages: stageViews(found.course, latest).map((v) => ({
           index: v.stage.index, slug: v.stage.slug, name: v.stage.name, difficulty: v.stage.difficulty,
@@ -114,6 +118,27 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse }:
         })),
         latestRun: run ? toSummary(run) : null,
       });
+    },
+
+    "/api/repos/:repo/runs": {
+      POST: async (req: Request & { params: { repo: string } }) => {
+        if (!lookup(req.params.repo)) return notFound("repo");
+        // JSON only, like POST /api/repos: a cross-site form cannot send it without a preflight this server refuses.
+        if (!req.headers.get("content-type")?.startsWith("application/json")) {
+          return json({ error: "expected content-type application/json" }, 415);
+        }
+        const body = (await req.json().catch(() => null)) as { stage?: unknown } | null;
+        if (body === null || typeof body !== "object" || (body.stage !== undefined && typeof body.stage !== "number")) {
+          return json({ error: "expected JSON {stage?: number}" }, 400);
+        }
+        try {
+          return json(startRun(req.params.repo, body.stage as number | undefined), 202);
+        } catch (e) {
+          if (e instanceof UnknownRepoError) return notFound("repo");
+          if (e instanceof RunRequestError) return json({ error: e.message }, e.status);
+          return json({ error: errorText(e) }, 500);
+        }
+      },
     },
 
     "/api/repos/:repo/runs/:id": (req: Request & { params: { repo: string; id: string } }) => {
@@ -137,9 +162,18 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse }:
         start(controller) {
           const send = (run: RunRecord) =>
             controller.enqueue(encoder.encode(`event: run\ndata: ${JSON.stringify(toSummary(run))}\n\n`));
+          const sendLine = (e: LogEvent) =>
+            controller.enqueue(encoder.encode(`event: log\ndata: ${JSON.stringify({ runId: e.runId, line: e.line })}\n\n`));
           const latest = store.latestRun(found.repo.name);
           if (latest) send(latest);
-          const off = events.subscribe(found.repo.name, (e) => send(e.run));
+          // A page opened mid-run first gets the lines printed so far.
+          for (const line of events.bufferedLines(found.repo.name)) sendLine(line);
+          const offRuns = events.subscribe(found.repo.name, (e) => send(e.run));
+          const offLines = events.subscribeLines(found.repo.name, sendLine);
+          const off = () => {
+            offRuns();
+            offLines();
+          };
           const keepAlive = setInterval(() => controller.enqueue(encoder.encode(": keep-alive\n\n")), 15000);
           cleanup = () => {
             off();

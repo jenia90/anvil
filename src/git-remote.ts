@@ -23,11 +23,21 @@ export function ensureBareRepo(dataDir: string, repoName: string, appPort: numbe
     git(dirname(dir), "init", "--bare", "-q", "-b", "main", dir);
   }
   git(dir, "config", "http.receivepack", "true");
+  git(dir, "config", "receive.advertisePushOptions", "true"); // git push -o stage=N
   const hook = join(dir, "hooks/post-receive");
   writeFileSync(
     hook,
     `#!/bin/sh
-curl --no-buffer -sS -X POST -H "x-anvil-token: ${hookToken}" --data-binary @- "http://127.0.0.1:${appPort}/internal/post-receive/${repoName}" \\
+# Push options (git push -o stage=N) go to the app as numbered headers; git forbids newlines in them.
+set --
+i=0
+while [ "$i" -lt "\${GIT_PUSH_OPTION_COUNT:-0}" ]; do
+  eval "opt=\\\${GIT_PUSH_OPTION_$i}"
+  opt=$(printf '%s' "$opt" | tr -d '\\r') # git allows a CR (from CRLF scripts); in a header it would drop the push
+  set -- "$@" -H "x-anvil-push-option-$i: $opt"
+  i=$((i + 1))
+done
+curl --no-buffer -sS -X POST -H "x-anvil-token: ${hookToken}" "$@" --data-binary @- "http://127.0.0.1:${appPort}/internal/post-receive/${repoName}" \\
   || echo "anvil: could not reach the app" >&2
 exit 0
 `,
@@ -114,6 +124,14 @@ export async function serveGit(req: Request, reposRoot: string): Promise<Respons
     },
   });
   return new Response(body, { status, headers });
+}
+
+/** The commit `main` points to in the repo's remote, or null before the first push to main. */
+export function mainHead(dataDir: string, repoName: string): string | null {
+  const dir = bareRepoDir(dataDir, repoName);
+  if (!existsSync(dir)) return null;
+  const p = Bun.spawnSync(["git", "--git-dir", dir, "rev-parse", "--verify", "-q", "refs/heads/main"]);
+  return p.exitCode === 0 ? p.stdout.toString().trim() : null;
 }
 
 /** Whether the repo's remote has any commit (a course started from the web app is seeded with the starter). */
