@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type RunDetail, TEMPER_HUES, activityHtml, advanceOf, calendarHtml, dayKey, diffHtml, formatDuration, relativeTime, runRowHtml,
   stageSummaryText, statsHtml, streak, apiErrorMessage, faviconHref, followRun, keyAction, liveLineText, liveLogHtml,
-  notificationText, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
+  hintButtonLabel, hintHtml, notificationText, splitHintOutput, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
 } from "../web/render";
 import type { RunSummary } from "../src/api";
 import type { RunStatus } from "../src/store";
@@ -54,6 +54,16 @@ describe("flyoutHtml", () => {
     const html = flyoutHtml(failed, names);
     expect(html).toContain('<details class="diff" data-run="1" data-stage="s2" data-index="2">');
     expect(html).toContain("<summary>Changes since stage 2 last passed</summary>");
+  });
+
+  test("offers a hint under each failed stage when hints are on", () => {
+    expect(flyoutHtml(failed, names, { hints: true })).toContain('<div class="hint-box" data-run="1" data-stage="s2">');
+    expect(flyoutHtml(failed, names, { hints: true })).toContain("💡 Hint");
+    expect(flyoutHtml(failed, names)).not.toContain('class="hint-box"');
+  });
+
+  test("says how to turn hints on when asked to", () => {
+    expect(flyoutHtml(failed, names, { hints: false, offNote: true })).toContain("Hints are off: set hint.command in anvil.yml");
   });
 
   test("no diff toggle for working-tree runs", () => {
@@ -535,5 +545,33 @@ describe("statsHtml and activityHtml", () => {
   test("activityHtml is empty without runs", () => {
     expect(activityHtml([], now)).toBe("");
     expect(activityHtml([at(2026, 11, 21, 9)], now)).toContain("1-day streak");
+  });
+});
+
+describe("hints", () => {
+  test("hintHtml escapes the model's text and renders markdown", () => {
+    const html = hintHtml(["Check the **status line** <script>alert(1)</script>"]);
+    expect(html).toContain("<strong>status line</strong>");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("Hint 1");
+  });
+
+  test("hintHtml shows code spans once-escaped", () => {
+    const html = hintHtml(["Look at `Vec<u8>` and `&str`.\n\n> a quote"]);
+    expect(html).toContain("<code>Vec&lt;u8&gt;</code>");
+    expect(html).toContain("<code>&amp;str</code>");
+    expect(html).toContain("<blockquote>");
+  });
+
+  test("splitHintOutput separates the hint from a failure line", () => {
+    expect(splitHintOutput("Think about it.\n")).toEqual({ hint: "Think about it.", error: null });
+    expect(splitHintOutput("partial\n\0hint command failed: oops\n")).toEqual({ hint: "partial", error: "hint command failed: oops" });
+    expect(splitHintOutput("  \n")).toEqual({ hint: "", error: "the hint command printed nothing" });
+  });
+
+  test("hintButtonLabel goes deeper, then stops", () => {
+    expect([0, 1, 2, 3].map(hintButtonLabel)).toEqual([
+      "💡 Hint", "💡 Deeper hint (2/3)", "💡 Deeper hint (3/3)", "No deeper hints: you've got this",
+    ]);
   });
 });

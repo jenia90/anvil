@@ -491,6 +491,17 @@ details.diff > summary { cursor: pointer; color: var(--muted); font-size: 13px; 
 .diff-files .add, .diff-files .del { font-family: var(--mono); }
 @media (prefers-color-scheme: light) { .diff-files .add { color: var(--ok); } .diff-files .del { color: var(--bad); } }
 
+/* Hints */
+.hint-box { margin: 4px 0 14px; display: grid; gap: 8px; justify-items: start; }
+.hint-texts { display: grid; gap: 8px; width: 100%; }
+.hint-text {
+  padding: 8px 14px; border-radius: 10px; border-left: 3px solid var(--hue-color, var(--accent));
+  background: var(--surface-2); font-size: 14px;
+}
+.hint-text .eyebrow { margin-bottom: 4px; }
+.hint-text .markdown p:last-child { margin-bottom: 0; }
+.hint-text.streaming { white-space: pre-wrap; color: var(--muted); }
+
 /* Motion */
 @keyframes pulse {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 60%, transparent); }

@@ -153,6 +153,34 @@ merge or rebase is unfinished, and checks `--stage` before committing anything. 
 the last result of your current commit (or runs it again, for `--stage`). It always pushes your current commit to
 `main`, whichever local branch you are on.
 
+## Hints
+
+A failed stage's details have a **💡 Hint** button. Each click asks a model for a hint one level deeper: a nudge,
+then the concept involved, then where in your code to look. Every model is told never to give code or the answer.
+
+Any command-line model works: anvil sends the prompt on stdin and shows what the command prints. Set it in
+`anvil.yml`:
+
+```yaml
+hint:
+  command: claude -p                    # the default when claude is installed
+  # command: codex exec -
+  # command: gemini -p
+  # command: ollama run qwen2.5-coder   # local and offline
+  # command: llm -m gpt-4o
+  maxPromptKB: 150                      # the whole prompt's size; lower it for small local models
+# hint: false                           # turn hints off
+```
+
+The prompt holds the stage instructions, the failing test output, the diff since the stage last passed and your code
+at that commit (changed files first, then source before setup files and lockfiles), all within `maxPromptKB`. Runs
+from `anvil test` have no commit, so their hints get no code and no diff. The prompt goes to whatever your command
+talks to (for `claude -p`, Anthropic). The command runs in an empty folder, one hint at a time, for at most three
+minutes; a failed or timed-out hint shows its error and does not use up a level.
+
+`claude -p` loads your own Claude Code settings (CLAUDE.md, hooks, MCP servers), which can slow it down or change its
+style. With an API key you can skip them: `command: claude -p --bare`.
+
 ## Where data lives
 
 `dataDir` (default `./data`, beside the config file) holds one bare git repo per registered repo

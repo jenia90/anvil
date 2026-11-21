@@ -2,6 +2,7 @@ import type { Catalog } from "./catalog";
 import { type Config, appUrl } from "./config";
 import type { LogEvent, RunEvents } from "./events";
 import { diffCommits, hasCommits, mainHead, remoteUrl } from "./git-remote";
+import { HINT_TIMEOUT_MS, type HintLevel, buildHintPrompt, gatherCode, runHintCommand } from "./hints";
 import { stageStats } from "./stats";
 import { renderStageMd } from "./course";
 import { currentStageIndex, stageViews } from "./progress";
@@ -19,6 +20,8 @@ export type ApiDeps = {
   startCourse: (course: string, language: string) => Promise<{ name: string; cloneUrl: string }>;
   /** Runs the head of main again: all stages up to the current one, or only `stage`. */
   startRun: (repo: string, stage: number | undefined) => { runId: number };
+  /** How long a hint command may run (tests shorten it). */
+  hintTimeoutMs?: number;
 };
 
 export const toSummary = ({ buildLog: _b, testerLog: _t, ...rest }: RunRecord): RunSummary => rest;
@@ -31,7 +34,8 @@ const DIFF_CAP = 200 * 1024;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function apiRoutes({ config, store, events, port, catalog, startCourse, startRun }: ApiDeps) {
+export function apiRoutes({ config, store, events, port, catalog, startCourse, startRun, hintTimeoutMs = HINT_TIMEOUT_MS }: ApiDeps) {
+  let hintBusy = false; // one hint at a time: a local model may need the whole machine
   // A repo's remote never loses its commits, so once seen they need no further git call.
   const seeded = new Set<string>();
   const hasCommitsCached = (name: string) => {
@@ -112,6 +116,7 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse, s
           ? `git clone ${url} codecrafters-${found.repo.course}-${found.repo.language}`
           : null,
         canRun: mainHead(config.dataDir, found.repo.name) !== null,
+        hints: config.hint !== null,
         currentIndex: currentStageIndex(found.course, latest),
         stages: stageViews(found.course, latest).map((v) => ({
           index: v.stage.index, slug: v.stage.slug, name: v.stage.name, difficulty: v.stage.difficulty,
@@ -135,6 +140,47 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse, s
         totalRuns: counts.total, finishedRuns: counts.finished, passedRuns: counts.passed,
         stages: stageStats(found.course, store.mainRuns(found.repo.name)),
       });
+    },
+
+    "/api/repos/:repo/runs/:id/hint": {
+      POST: async (req: Request & { params: { repo: string; id: string } }) => {
+        const found = lookup(req.params.repo);
+        if (!found) return notFound("repo");
+        const run = store.getRun(Number(req.params.id));
+        if (!run || run.repo !== found.repo.name) return notFound("run");
+        if (!req.headers.get("content-type")?.startsWith("application/json")) {
+          return json({ error: "expected content-type application/json" }, 415);
+        }
+        const hint = config.hint;
+        if (!hint) return json({ error: "hints are not set up: add hint.command to anvil.yml" }, 409);
+        const body = (await req.json().catch(() => null)) as { stage?: unknown; level?: unknown; previous?: unknown } | null;
+        const failed = run.stageResults.find((r) => r.stageSlug === body?.stage && r.status === "failed");
+        const stage = found.course.stages.find((s) => s.slug === body?.stage);
+        const previous = Array.isArray(body?.previous) ? body.previous.filter((p): p is string => typeof p === "string") : [];
+        if (!failed || !stage || ![1, 2, 3].includes(body?.level as number)) {
+          return json({ error: "expected JSON {stage: <slug of a stage that failed in this run>, level: 1|2|3, previous: string[]}" }, 400);
+        }
+        if (hintBusy) return json({ error: "a hint is already being written; try again when it is done" }, 409);
+        hintBusy = true;
+        try {
+          const workingTree = run.branch === WORKING_TREE;
+          const base = workingTree ? null : store.lastPassingCommit(found.repo.name, stage.slug, run.id);
+          const diff = base && base !== run.commitSha ? diffCommits(config.dataDir, found.repo.name, base, run.commitSha, DIFF_CAP) : null;
+          const changed = diff && !("missing" in diff) ? diff.files.map((f) => f.path) : [];
+          const code = workingTree ? { files: [], skipped: [], notRead: [] } : gatherCode(config.dataDir, found.repo.name, run.commitSha, changed, hint.maxPromptBytes);
+          const prompt = buildHintPrompt({
+            language: found.repo.language,
+            stage: { index: stage.index, name: stage.name, descriptionMd: renderStageMd(stage.descriptionMd, found.repo.language, true) },
+            log: failed.log, diff: diff && !("missing" in diff) ? diff.patch : null, files: code.files, skipped: code.skipped, notRead: code.notRead,
+            workingTree, level: body!.level as HintLevel, previous, maxBytes: hint.maxPromptBytes,
+          });
+          const stream = runHintCommand(hint.command, prompt, hintTimeoutMs, () => void (hintBusy = false));
+          return new Response(stream, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-cache" } });
+        } catch (e) {
+          hintBusy = false;
+          return json({ error: `could not start the hint: ${errorText(e)}` }, 500);
+        }
+      },
     },
 
     "/api/repos/:repo/runs/:id/diff": (req: Request & { params: { repo: string; id: string } }) => {

@@ -87,7 +87,7 @@ export const languageName = (slug: string) => LANGUAGE_NAMES[slug] ?? slug.charA
  * Stage text is a mustache template: `{{#lang_is_rust}}...{{/lang_is_rust}}` shows only for that language,
  * `{{#reader_is_bot}}` only to AI tutors, `{{language_name}}` is the display name. Rendered as a human reader would see it.
  */
-export function renderStageMd(md: string, language: string): string {
-  const view = { [`lang_is_${language}`]: true, reader_is_bot: false, language_name: languageName(language) };
+export function renderStageMd(md: string, language: string, readerIsBot = false): string {
+  const view = { [`lang_is_${language}`]: true, reader_is_bot: readerIsBot, language_name: languageName(language) };
   return Mustache.render(md, view, {}, { escape: (s: string) => s });
 }

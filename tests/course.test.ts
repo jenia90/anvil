@@ -82,3 +82,12 @@ describe("renderStageMd", () => {
     expect(renderStageMd("```{{=<~ ~>=}}\n{{}}\n```", "rust")).toBe("```\n{{}}\n```");
   });
 });
+
+describe("renderStageMd for bots", () => {
+  test("renderStageMd shows bot-only text to bots", () => {
+    const md = "Hi{{#reader_is_bot}} (tutor note){{/reader_is_bot}}";
+    expect(renderStageMd(md, "rust")).toBe("Hi");
+    expect(renderStageMd(md, "rust", true)).toBe("Hi (tutor note)");
+  });
+});
+

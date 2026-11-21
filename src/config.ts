@@ -13,6 +13,8 @@ export type Config = {
   dataDir: string;
   courses: Map<string, { course: Course; testerPath: string }>;
   repos: RepoConfig[];
+  /** The hint command (prompt on stdin, hint on stdout) and the prompt budget; null when hints are off. */
+  hint: { command: string; maxPromptBytes: number } | null;
 };
 
 /** Provides a course that `courses:` does not list: where its definition and tester binary are on disk. */
@@ -24,7 +26,25 @@ type RawConfig = {
   dataDir?: string;
   courses?: { definition: string; tester: string }[];
   repos?: RepoConfig[];
+  hint?: false | { command?: unknown; maxPromptKB?: unknown };
 };
+
+const DEFAULT_PROMPT_KB = 150;
+
+/** `hint:` → the command and budget; false turns hints off; unset uses `claude -p` when claude is installed. */
+function parseHint(raw: RawConfig["hint"], which: (cmd: string) => string | null): Config["hint"] {
+  if (raw === false) return null;
+  if (raw === undefined || raw === null) {
+    return which("claude") ? { command: "claude -p", maxPromptBytes: DEFAULT_PROMPT_KB * 1024 } : null;
+  }
+  if (typeof raw !== "object") throw new Error("invalid hint: expected false or { command, maxPromptKB }");
+  if (typeof raw.command !== "string" || raw.command.trim() === "") {
+    throw new Error("invalid hint.command: expected a command line such as claude -p");
+  }
+  const kb = raw.maxPromptKB ?? DEFAULT_PROMPT_KB;
+  if (typeof kb !== "number" || !Number.isInteger(kb) || kb < 1) throw new Error("invalid hint.maxPromptKB: expected a whole number of KB");
+  return { command: raw.command, maxPromptBytes: kb * 1024 };
+}
 
 const REPO_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -55,7 +75,11 @@ const noFetch: CourseFetcher = async (slug) => {
  * Courses listed under `courses:` are used from local paths. Any other course a repo names is asked of `fetchCourse`
  * (in the app: downloaded from GitHub).
  */
-export async function loadConfig(configPath: string, fetchCourse: CourseFetcher = noFetch): Promise<Config> {
+export async function loadConfig(
+  configPath: string,
+  fetchCourse: CourseFetcher = noFetch,
+  which: (cmd: string) => string | null = Bun.which,
+): Promise<Config> {
   const dir = dirname(resolve(configPath));
   const raw = (load(readFileSync(configPath, "utf8")) ?? {}) as RawConfig;
   const dataDir = resolve(dir, raw.dataDir ?? "./data");
@@ -82,7 +106,10 @@ export async function loadConfig(configPath: string, fetchCourse: CourseFetcher 
     repos.push({ name: r.name, course: r.course, language: r.language });
   }
 
-  return { path: resolve(configPath), port: raw.port ?? 4300, url: parseUrl(raw.url), dataDir, courses, repos };
+  return {
+    path: resolve(configPath), port: raw.port ?? 4300, url: parseUrl(raw.url), dataDir, courses, repos,
+    hint: parseHint(raw.hint, which),
+  };
 }
 
 /**

@@ -5,7 +5,7 @@ import { FINISHED } from "../src/events";
 import type { Catalog, CatalogCourse } from "../src/catalog";
 import {
   type DiffView, type RepoListItem, type RunDetail, type RunListItemView, type StatsView, activityHtml, advanceOf, diffHtml,
-  runRowHtml, statsHtml, apiErrorMessage, courseHue, coursesHtml, esc, faviconHref, flyoutHtml,
+  hintButtonLabel, hintHtml, runRowHtml, splitHintOutput, statsHtml, apiErrorMessage, courseHue, coursesHtml, esc, faviconHref, flyoutHtml,
   followRun, footerHtml, keyAction, liveLineText, liveLogHtml, lockedHtml, navHtml, notificationText, progressHtml,
   repoCardsHtml, setupHtml, shortcutsHtml, sparksHtml, stripText, titlePrefix, toastHtml,
 } from "./render";
@@ -16,7 +16,7 @@ type StageInfo = {
 };
 type RepoDetail = {
   name: string; course: { slug: string; name: string }; setupCommand: string; cloneCommand: string | null;
-  currentIndex: number | null; stages: StageInfo[]; latestRun: RunSummary | null; canRun: boolean;
+  currentIndex: number | null; stages: StageInfo[]; latestRun: RunSummary | null; canRun: boolean; hints: boolean;
 };
 
 const app = document.getElementById("app")!;
@@ -55,6 +55,62 @@ document.addEventListener("click", async (e) => {
 const showToday = () => {
   for (const c of document.querySelectorAll<HTMLElement>(".heatmap-scroll")) c.scrollLeft = c.scrollWidth;
 };
+
+// Hints given per run and stage. Kept here, not in the markup, so re-rendering the run details keeps them.
+const givenHints = new Map<string, string[]>();
+const hintKey = (el: HTMLElement) => `${el.dataset.run}:${el.dataset.stage}`;
+
+/** Fills every hint box under `root` from the hints given so far. */
+function showHints(root: ParentNode): void {
+  for (const box of root.querySelectorAll<HTMLElement>(".hint-box")) {
+    const texts = givenHints.get(hintKey(box)) ?? [];
+    box.querySelector(".hint-texts")!.innerHTML = hintHtml(texts);
+    const button = box.querySelector<HTMLButtonElement>(".hint-button")!;
+    button.textContent = hintButtonLabel(texts.length);
+    button.disabled = texts.length >= 3 || box.dataset.busy === "1";
+  }
+}
+
+// The Hint button: asks for the next level and streams the answer into the box.
+document.addEventListener("click", async (e) => {
+  const button = (e.target as HTMLElement).closest<HTMLButtonElement>(".hint-button");
+  const box = button?.closest<HTMLElement>(".hint-box");
+  if (!button || !box || button.disabled) return;
+  const texts = givenHints.get(hintKey(box)) ?? [];
+  if (texts.length >= 3) return;
+  const repo = decodeURIComponent(location.pathname.split("/")[2] ?? "");
+  box.dataset.busy = "1";
+  button.disabled = true;
+  button.textContent = "Writing a hint…";
+  box.querySelector(".hint-error")?.remove();
+  const live = document.createElement("div");
+  live.className = "hint-text streaming";
+  live.textContent = "…";
+  box.querySelector(".hint-texts")!.append(live);
+  try {
+    const res = await fetch(`/api/repos/${encodeURIComponent(repo)}/runs/${box.dataset.run}/hint`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stage: box.dataset.stage, level: texts.length + 1, previous: texts }),
+    });
+    if (!res.ok) throw new Error(apiErrorMessage(res.status, await res.text()));
+    const decoder = new TextDecoder();
+    let text = "";
+    for await (const chunk of res.body!) {
+      text += decoder.decode(chunk, { stream: true });
+      live.textContent = splitHintOutput(text).hint;
+    }
+    // A failed command does not use up a level: show its error, keep the hints as they were.
+    const { hint, error } = splitHintOutput(text);
+    if (error) throw new Error(error);
+    givenHints.set(hintKey(box), [...texts, hint]);
+  } catch (err) {
+    box.insertAdjacentHTML("beforeend", `<p class="error hint-error">${esc(err instanceof Error ? err.message : String(err))}</p>`);
+  } finally {
+    delete box.dataset.busy;
+    live.remove();
+    showHints(document); // the details may have been re-rendered while the hint was written
+  }
+});
 
 async function homePage(): Promise<void> {
   const [repos, activity] = await Promise.all([
@@ -306,7 +362,8 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
       flyout.scrollTop = flyout.scrollHeight;
     } else {
       const run = await getJson<RunDetail>(`/api/repos/${repo}/runs/${latest.id}`);
-      flyout.innerHTML = `${flyoutHeader()}${flyoutHtml(run, names())}`;
+      flyout.innerHTML = `${flyoutHeader()}${flyoutHtml(run, names(), { hints: detail.hints, offNote: true })}`;
+      showHints(flyout);
       flyout.querySelector("mark")?.scrollIntoView({ block: "center" });
     }
     document.getElementById("close-flyout")!.onclick = closeFlyout;
@@ -525,7 +582,8 @@ async function historyPage(repo: string): Promise<void> {
       const target = row.querySelector(".run-detail")!;
       try {
         const run = await getJson<RunDetail>(`/api/repos/${encodeURIComponent(repo)}/runs/${row.dataset.run}`);
-        target.innerHTML = flyoutHtml(run, names);
+        target.innerHTML = flyoutHtml(run, names, { hints: detail.hints });
+        showHints(target);
       } catch (err) {
         delete row.dataset.loaded;
         target.innerHTML = `<p class="error">${esc(err instanceof Error ? err.message : String(err))}</p>`;

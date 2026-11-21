@@ -14,6 +14,7 @@ export type ServerDeps = PushDeps & {
   startCourse: ApiDeps["startCourse"];
   /** Replaces the re-run starter (tests); by default it runs the head of main. */
   startRun?: ApiDeps["startRun"];
+  hintTimeoutMs?: number;
 };
 
 export function startServer(deps: ServerDeps): { port: number; hostname: string; stop(): void } {
@@ -112,7 +113,7 @@ export function startServer(deps: ServerDeps): { port: number; hostname: string;
   type Handler = (req: Request) => Response | Promise<Response>;
   const routes = apiRoutes({
     config: deps.config, store: deps.store, events: deps.events, port: () => actualPort,
-    catalog: deps.catalog, startCourse: deps.startCourse,
+    catalog: deps.catalog, startCourse: deps.startCourse, hintTimeoutMs: deps.hintTimeoutMs,
     startRun:
       deps.startRun ??
       ((repo, stage) => {

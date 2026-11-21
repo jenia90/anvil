@@ -1,4 +1,4 @@
-import { marked } from "marked";
+import { Marked, marked } from "marked";
 import { ansiToHtml, stripAnsi } from "../src/ansi";
 import type { RunSummary } from "../src/api";
 import type { Catalog } from "../src/catalog";
@@ -181,7 +181,16 @@ function logHtml(log: string, failureLine: string | null = null): string {
   return `<pre class="log">${lines.join("\n")}</pre>`;
 }
 
-export function flyoutHtml(run: RunDetail, stageNames: Map<number, string>): string {
+/** `hints`: show the Hint button under failed stages; `offNote`: say how to turn hints on when they are off. */
+export function flyoutHtml(
+  run: RunDetail, stageNames: Map<number, string>, opts: { hints?: boolean; offNote?: boolean } = {},
+): string {
+  const hint = (slug: string) =>
+    opts.hints
+      ? `<div class="hint-box" data-run="${run.id}" data-stage="${esc(slug)}"><div class="hint-texts"></div><button type="button" class="ghost hint-button">${hintButtonLabel(0)}</button></div>`
+      : opts.offNote
+        ? '<p class="muted hint-off">Hints are off: set hint.command in anvil.yml (see the README).</p>'
+        : "";
   switch (run.status) {
     case "queued":
     case "building":
@@ -206,7 +215,7 @@ export function flyoutHtml(run: RunDetail, stageNames: Map<number, string>): str
               r.failureLine,
             )}${run.branch === "working tree" ? "" : `<details class="diff" data-run="${run.id}" data-stage="${esc(r.stageSlug)}" data-index="${r.stageIndex}"><summary>Changes since stage ${
               r.stageIndex
-            } last passed</summary><div class="diff-body"></div></details>`}</section>`,
+            } last passed</summary><div class="diff-body"></div></details>`}${hint(r.stageSlug)}</section>`,
         )
         .join("");
   }
@@ -476,4 +485,28 @@ export function activityHtml(runTimes: number[], now: number): string {
     runTimes,
     now,
   )}</section>`;
+}
+
+/** Markdown for model output: raw HTML in it is shown as text, never rendered (marked escapes code spans itself). */
+const hintMarkdown = new Marked({ renderer: { html: ({ text }) => esc(text) } });
+
+/** The hints given so far for a stage, rendered as markdown. */
+export function hintHtml(texts: string[]): string {
+  return texts
+    .map((t, i) => `<div class="hint-text"><p class="eyebrow">Hint ${i + 1}</p><div class="markdown">${hintMarkdown.parse(t, { async: false })}</div></div>`)
+    .join("");
+}
+
+/** The hint command's output: the hint, and the failure the server appended after a NUL, if any. */
+export function splitHintOutput(text: string): { hint: string; error: string | null } {
+  const at = text.indexOf("\0");
+  const hint = (at < 0 ? text : text.slice(0, at)).trim();
+  const error = at < 0 ? null : text.slice(at + 1).trim();
+  return { hint, error: error ?? (hint ? null : "the hint command printed nothing") };
+}
+
+/** The Hint button's label after `given` hints: three levels, each deeper. */
+export function hintButtonLabel(given: number): string {
+  if (given === 0) return "💡 Hint";
+  return given < 3 ? `💡 Deeper hint (${given + 1}/3)` : "No deeper hints: you've got this";
 }
