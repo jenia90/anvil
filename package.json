@@ -3,6 +3,9 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "anvil": "src/cli.ts"
+  },
   "scripts": {
     "test": "bun test",
     "start": "bun run src/main.ts",

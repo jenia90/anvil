@@ -133,6 +133,48 @@ describe("git push to the app", () => {
     expect(rerun.status).toBe("passed");
   });
 
+  test("test route runs the uploaded tree", async () => {
+    const { workDir, store, server } = await boot();
+    const tar = new Uint8Array(Bun.spawnSync(["tar", "-c", "-C", workDir, ".codecrafters", "your_program.sh"]).stdout);
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/repos/demo/test`, {
+      method: "POST", headers: { "content-type": "application/x-tar", "x-anvil-commit": "b".repeat(40) }, body: tar,
+    });
+    expect(res.status).toBe(200);
+    const runId = Number(res.headers.get("x-anvil-run"));
+    const text = await res.text();
+    expect(text).toContain("Stage 1: Bind to a port");
+    expect(text).toContain("Working tree: tested, but only pushes to main move progress.");
+    const run = store.getRun(runId)!;
+    expect(run.branch).toBe("working tree");
+    expect(run.commitSha).toBe("b".repeat(40));
+    expect(run.status).toBe("passed");
+    expect(store.latestStageResults("demo").size).toBe(0);
+  });
+
+  test("test route needs a tar", async () => {
+    const { server } = await boot();
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/repos/demo/test`, { method: "POST", body: "x" });
+    expect(res.status).toBe(415);
+  });
+
+  test("test route refuses a locked stage", async () => {
+    const { server, store } = await boot();
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/repos/demo/test?stage=3`, {
+      method: "POST", headers: { "content-type": "application/x-tar" }, body: new Uint8Array(1024),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("stage 3 is locked; pass stage 1 first");
+    expect(store.latestRun("demo")).toBeNull();
+  });
+
+  test("test route rejects a stage that is not a number", async () => {
+    const { server } = await boot();
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/repos/demo/test?stage=abc`, {
+      method: "POST", headers: { "content-type": "application/x-tar" }, body: new Uint8Array(1024),
+    });
+    expect(res.status).toBe(400);
+  });
+
   test("the server listens on 127.0.0.1 only", async () => {
     const { server } = await boot();
     expect(server.hostname).toBe("127.0.0.1");

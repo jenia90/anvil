@@ -204,9 +204,9 @@ export function flyoutHtml(run: RunDetail, stageNames: Map<number, string>): str
             `<section class="fail"><h3>Stage ${r.stageIndex}: ${ansiToHtml(stageNames.get(r.stageIndex) ?? r.stageSlug)}</h3>${logHtml(
               r.log,
               r.failureLine,
-            )}<details class="diff" data-run="${run.id}" data-stage="${esc(r.stageSlug)}" data-index="${r.stageIndex}"><summary>Changes since stage ${
+            )}${run.branch === "working tree" ? "" : `<details class="diff" data-run="${run.id}" data-stage="${esc(r.stageSlug)}" data-index="${r.stageIndex}"><summary>Changes since stage ${
               r.stageIndex
-            } last passed</summary><div class="diff-body"></div></details></section>`,
+            } last passed</summary><div class="diff-body"></div></details>`}</section>`,
         )
         .join("");
   }

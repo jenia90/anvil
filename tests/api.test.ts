@@ -459,4 +459,15 @@ describe("repo detail clone command", () => {
     const other = store.createRun("elsewhere", "main", "x", []);
     expect((await get(`/api/repos/demo/runs/${other.id}/diff?stage=ia4`)).status).toBe(404);
   });
+
+  test("diff refuses working-tree runs", async () => {
+    const { store, get } = await boot();
+    const run = store.createRun("demo", "working tree", "a".repeat(40), ["at4"]);
+    store.finishRun(run.id, {
+      status: "failed", buildLog: "", testerLog: "", results: [{ slug: "at4", status: "failed", log: "", failureLine: null }],
+    });
+    const res = await get(`/api/repos/demo/runs/${run.id}/diff?stage=at4`);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("working-tree runs have no diff");
+  });
 });

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { type Config, loadConfig } from "../src/config";
 import { RunEvents } from "../src/events";
 import { bareRepoDir } from "../src/git-remote";
-import { type PushDeps, UnknownRepoError, handlePush, parseRefUpdates, startRun } from "../src/pushes";
+import { type PushDeps, UnknownRepoError, WORKING_TREE, handlePush, parseRefUpdates, startRun } from "../src/pushes";
 import { SerialQueues } from "../src/queue";
 import { Store } from "../src/store";
 import { makeFixtureRepo } from "./helpers";
@@ -129,6 +129,14 @@ describe("single-stage runs", () => {
     await done;
     expect(statuses.at(-1)).toBe("passed");
     expect(events.bufferedLines("demo").filter((l) => l.runId === runId)).toEqual([]);
+  });
+
+  test("working-tree run says progress does not move", async () => {
+    const { deps, store, sha } = await setup();
+    const out: string[] = [];
+    await startRun(deps, "demo", { branch: WORKING_TREE, sha }, (l) => out.push(l)).done;
+    expect(out).toContain("Working tree: tested, but only pushes to main move progress.");
+    expect(store.latestStageResults("demo").size).toBe(0);
   });
 
   test("startRun output lines are published as log events with the run id", async () => {

@@ -56,6 +56,10 @@ describe("flyoutHtml", () => {
     expect(html).toContain("<summary>Changes since stage 2 last passed</summary>");
   });
 
+  test("no diff toggle for working-tree runs", () => {
+    expect(flyoutHtml({ ...failed, branch: "working tree" }, names)).not.toContain('class="diff"');
+  });
+
   test("wraps the failing line in <mark>", () => {
     const html = flyoutHtml(failed, names);
     expect(html).toMatch(/<mark>.*Expected status code 200, got 404.*<\/mark>/);

@@ -1,7 +1,10 @@
 import index from "../web/index.html";
 import { type ApiDeps, apiRoutes } from "./api";
 import { mainHead, serveGit } from "./git-remote";
-import { type PushDeps, RunRequestError, UnknownRepoError, handlePush, parseRefUpdates, startRun } from "./pushes";
+import { TEST_UPLOAD_CAP } from "./limits";
+import { type PushDeps, RunRequestError, UnknownRepoError, WORKING_TREE, handlePush, parseRefUpdates, startRun } from "./pushes";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type ServerDeps = PushDeps & {
@@ -41,6 +44,52 @@ export function startServer(deps: ServerDeps): { port: number; hostname: string;
       },
     });
     return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  };
+
+  /** `anvil test`: runs an uploaded tar of the learner's working tree and streams the output back, like a push. */
+  const testWorkingTree = async (req: Request & { params: { repo: string } }): Promise<Response> => {
+    const error = (status: number, message: string) => Response.json({ error: message }, { status });
+    const repo = req.params.repo;
+    if (!deps.config.repos.some((r) => r.name === repo)) return error(404, `unknown repo: ${repo}`);
+    // A cross-site page cannot send this content type without a preflight, which this server never approves.
+    if (!req.headers.get("content-type")?.startsWith("application/x-tar")) {
+      return error(415, "expected content-type application/x-tar");
+    }
+    const tooBig = () => error(413, `the working tree is larger than ${TEST_UPLOAD_CAP / 1024 / 1024} MiB`);
+    if (Number(req.headers.get("content-length") ?? 0) > TEST_UPLOAD_CAP) return tooBig();
+    const stageParam = new URL(req.url).searchParams.get("stage");
+    if (stageParam !== null && !/^\d+$/.test(stageParam)) return error(400, "stage must be a whole number");
+    const stage = stageParam === null ? undefined : Number(stageParam);
+    const commit = req.headers.get("x-anvil-commit") ?? "";
+    const sha = /^[0-9a-f]{40,64}$/.test(commit) ? commit : "0".repeat(40);
+
+    const body = await req.arrayBuffer();
+    if (body.byteLength > TEST_UPLOAD_CAP) return tooBig();
+    const dir = mkdtempSync(join(tmpdir(), "anvil-upload-"));
+    const cleanup = () => rmSync(dir, { recursive: true, force: true });
+    const archive = join(dir, "tree.tar");
+    await Bun.write(archive, body);
+
+    const encoder = new TextEncoder();
+    let out!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start: (c) => void (out = c) });
+    let started: { runId: number; done: Promise<void> };
+    try {
+      started = startRun(deps, repo, { branch: WORKING_TREE, sha, stage, archive }, (line) => out.enqueue(encoder.encode(`${line}\n`)));
+    } catch (e) {
+      cleanup();
+      if (e instanceof RunRequestError) return error(e.status, e.message);
+      throw e;
+    }
+    void started.done.finally(() => {
+      cleanup();
+      try {
+        out.close();
+      } catch {} // the CLI hung up (Ctrl-C); the run has finished regardless
+    });
+    return new Response(stream, {
+      headers: { "content-type": "text/plain; charset=utf-8", "x-anvil-run": String(started.runId) },
+    });
   };
 
   let actualPort = deps.port;
@@ -87,6 +136,7 @@ export function startServer(deps: ServerDeps): { port: number; hostname: string;
     hostname: "127.0.0.1",
     port: deps.port,
     idleTimeout: 0,
+    maxRequestBodySize: TEST_UPLOAD_CAP + 1024 * 1024, // room for anvil test uploads (Bun's default is 128 MiB)
     // Bundle the page once at startup. Bun's development bundler watches web/ and rebuilds on change, and a file
     // deleted and recreated under it (git switch, git merge) leaves a bundle that fails to load in the browser.
     development: false,
@@ -97,6 +147,7 @@ export function startServer(deps: ServerDeps): { port: number; hostname: string;
       "/courses/*": index,
       "/git/*": guard((req) => serveGit(req, reposRoot)),
       "/internal/post-receive/:repo": { POST: guard(postReceive) },
+      "/api/repos/:repo/test": { POST: guard(testWorkingTree) },
       ...api,
     },
     fetch: () => new Response("not found\n", { status: 404 }),

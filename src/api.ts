@@ -5,7 +5,7 @@ import { diffCommits, hasCommits, mainHead, remoteUrl } from "./git-remote";
 import { stageStats } from "./stats";
 import { renderStageMd } from "./course";
 import { currentStageIndex, stageViews } from "./progress";
-import { RunRequestError, UnknownRepoError } from "./pushes";
+import { RunRequestError, UnknownRepoError, WORKING_TREE } from "./pushes";
 import { StartCourseError } from "./start-course";
 import type { RunRecord, Store } from "./store";
 
@@ -142,6 +142,8 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse, s
       if (!found) return notFound("repo");
       const run = store.getRun(Number(req.params.id));
       if (!run || run.repo !== found.repo.name) return notFound("run");
+      // The recorded commit of a working-tree run is not what was tested: a diff against it would mislead.
+      if (run.branch === WORKING_TREE) return json({ error: "working-tree runs have no diff" }, 400);
       const slug = new URL(req.url).searchParams.get("stage");
       if (!slug || !run.stageResults.some((r) => r.stageSlug === slug && r.status === "failed")) {
         return json({ error: "expected ?stage=<slug> of a stage that failed in this run" }, 400);

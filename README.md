@@ -113,6 +113,28 @@ The catalog lists the CodeCrafters courses that are live, in beta or in early ac
 in `dataDir/catalog.json` for a day (`--update` refreshes it). If GitHub cannot be reached, the saved catalog is
 shown.
 
+## Test without committing
+
+`anvil test` runs the tests on your working tree, uncommitted changes included, like `codecrafters test`. Set it up
+once, in the anvil folder:
+
+```sh
+bun link        # puts the anvil command on your PATH
+```
+
+Then, anywhere inside your solution repo (with anvil running):
+
+```sh
+anvil test              # stages 1 up to the current one
+anvil test --stage 3    # only stage 3 (it must be unlocked)
+```
+
+It sends the files git would commit (tracked files as they are now, plus new files that are not ignored; `target/`
+and other ignored build output stay local), streams the output, and exits 0 if the tests pass, 1 if they fail (or the run ends with an error) and 2
+if anvil could not start the run. Submodules and nested repos are sent as empty folders, as with a push. The run shows live on the stage page and in the history as `working tree`. Only pushes to `main`
+move your progress; a test run never does. anvil and the repo are found from the repo's anvil remote; with several,
+pick one with `--remote <name>`.
+
 ## Where data lives
 
 `dataDir` (default `./data`, beside the config file) holds one bare git repo per registered repo

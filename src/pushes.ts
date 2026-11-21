@@ -53,6 +53,8 @@ export function checkStage(course: Course, latest: Map<string, StageStatus>, sta
 }
 
 const BRANCH = "refs/heads/";
+/** The branch recorded for `anvil test` runs: the learner's uncommitted files, never progress. */
+export const WORKING_TREE = "working tree";
 
 /**
  * Starts one run of `sha`: every stage up to the current one, or only `stage`. Throws (creating nothing) when the
@@ -61,7 +63,7 @@ const BRANCH = "refs/heads/";
 export function startRun(
   deps: PushDeps,
   repoName: string,
-  req: { branch: string; sha: string; stage?: number },
+  req: { branch: string; sha: string; stage?: number; archive?: string },
   rawEmit: (line: string) => void,
 ): { runId: number; done: Promise<void> } {
   const repo = deps.config.repos.find((r) => r.name === repoName);
@@ -117,7 +119,7 @@ export function startRun(
       emit(`Testing ${req.sha.slice(0, 7)} on ${req.branch}: ${stages.length} stage(s)`);
 
       const outcome = await executeRun({
-        bareRepoDir: bareRepoDir(deps.dataDir, repoName), sha: req.sha, testerPath, cases, emit,
+        bareRepoDir: bareRepoDir(deps.dataDir, repoName), sha: req.sha, archive: req.archive, testerPath, cases, emit,
         onPhase: (p) => {
           store.setStatus(run.id, p);
           publish();
@@ -152,7 +154,8 @@ export function startRun(
       if (r.status === "passed") emit(`✔ Stage ${stage.index}: ${stage.name}`);
       if (r.status === "failed") emit(`✘ Stage ${stage.index}: ${stage.name} — ${r.failureLine ?? "failed"}`);
     }
-    if (req.branch !== "main") emit(`Branch ${req.branch}: tested, but only pushes to main move progress.`);
+    if (req.branch === WORKING_TREE) emit("Working tree: tested, but only pushes to main move progress.");
+    else if (req.branch !== "main") emit(`Branch ${req.branch}: tested, but only pushes to main move progress.`);
     const after = currentStageIndex(course, store.latestStageResults(repoName));
     if (after === null) {
       emit("All stages pass.");
