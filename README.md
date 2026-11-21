@@ -113,6 +113,74 @@ The catalog lists the CodeCrafters courses that are live, in beta or in early ac
 in `dataDir/catalog.json` for a day (`--update` refreshes it). If GitHub cannot be reached, the saved catalog is
 shown.
 
+## Test without committing
+
+`anvil test` runs the tests on your working tree, uncommitted changes included, like `codecrafters test`. Set it up
+once, in the anvil folder:
+
+```sh
+bun link        # puts the anvil command on your PATH
+```
+
+Then, anywhere inside your solution repo (with anvil running):
+
+```sh
+anvil test              # stages 1 up to the current one
+anvil test --stage 3    # only stage 3 (it must be unlocked)
+```
+
+It sends the files git would commit (tracked files as they are now, plus new files that are not ignored; `target/`
+and other ignored build output stay local), streams the output, and exits 0 if the tests pass, 1 if they fail (or the run ends with an error) and 2
+if anvil could not start the run. Submodules and nested repos are sent as empty folders, as with a push. The run shows live on the stage page and in the history as `working tree`. Only pushes to `main`
+move your progress; a test run never does. anvil and the repo are found from the repo's anvil remote; with several,
+pick one with `--remote <name>`.
+
+## Submit from the terminal
+
+`anvil submit` is the push counterpart, like `codecrafters submit`: it stages every change (`git add -A`, which
+respects `.gitignore`), commits it if there is anything to commit, and pushes to `main` on anvil. The push output is
+the test output, and the result moves your progress.
+
+```sh
+anvil submit                      # commit message: anvil submit
+anvil submit -m "parse RESP arrays"
+anvil submit --stage 4            # push, but run only stage 4 (git push -o stage=4)
+```
+
+Exit codes are the same as `anvil test`. If anvil's `main` has commits you do not have (pushed from another clone),
+the push is refused and anvil submit exits 2: bring them in first (`git pull --rebase`). It refuses to run while a
+merge or rebase is unfinished, and checks `--stage` before committing anything. With nothing new to push, it reports
+the last result of your current commit (or runs it again, for `--stage`). It always pushes your current commit to
+`main`, whichever local branch you are on.
+
+## Hints
+
+A failed stage's details have a **💡 Hint** button. Each click asks a model for a hint one level deeper: a nudge,
+then the concept involved, then where in your code to look. Every model is told never to give code or the answer.
+
+Any command-line model works: anvil sends the prompt on stdin and shows what the command prints. Set it in
+`anvil.yml`:
+
+```yaml
+hint:
+  command: claude -p                    # the default when claude is installed
+  # command: codex exec -
+  # command: gemini -p
+  # command: ollama run qwen2.5-coder   # local and offline
+  # command: llm -m gpt-4o
+  maxPromptKB: 150                      # the whole prompt's size; lower it for small local models
+# hint: false                           # turn hints off
+```
+
+The prompt holds the stage instructions, the failing test output, the diff since the stage last passed and your code
+at that commit (changed files first, then source before setup files and lockfiles), all within `maxPromptKB`. Runs
+from `anvil test` have no commit, so their hints get no code and no diff. The prompt goes to whatever your command
+talks to (for `claude -p`, Anthropic). The command runs in an empty folder, one hint at a time, for at most three
+minutes; a failed or timed-out hint shows its error and does not use up a level.
+
+`claude -p` loads your own Claude Code settings (CLAUDE.md, hooks, MCP servers), which can slow it down or change its
+style. With an API key you can skip them: `command: claude -p --bare`.
+
 ## Where data lives
 
 `dataDir` (default `./data`, beside the config file) holds one bare git repo per registered repo

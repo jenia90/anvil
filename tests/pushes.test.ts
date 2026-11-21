@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { type Config, loadConfig } from "../src/config";
 import { RunEvents } from "../src/events";
 import { bareRepoDir } from "../src/git-remote";
-import { type PushDeps, UnknownRepoError, handlePush, parseRefUpdates } from "../src/pushes";
+import { type PushDeps, UnknownRepoError, WORKING_TREE, handlePush, parseRefUpdates, startRun } from "../src/pushes";
 import { SerialQueues } from "../src/queue";
 import { Store } from "../src/store";
 import { makeFixtureRepo } from "./helpers";
@@ -31,8 +31,8 @@ async function setup(repos: string[] = ["demo"]) {
     config, store, events, queues: new SerialQueues(), dataDir,
     viewUrl: (repo, i) => `http://x/r/${repo}/${i}`,
   };
-  const push = (repo: string, branch = "main", emitted: string[] = []) =>
-    handlePush(deps, repo, [{ oldSha: ZERO, newSha: sha, ref: `refs/heads/${branch}` }], (l) => emitted.push(l));
+  const push = (repo: string, branch = "main", emitted: string[] = [], options: string[] = []) =>
+    handlePush(deps, repo, [{ oldSha: ZERO, newSha: sha, ref: `refs/heads/${branch}` }], (l) => emitted.push(l), options);
   return { deps, store, events, sha, push };
 }
 
@@ -46,6 +46,109 @@ async function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>): Pr
   }
 }
 
+/** Records a finished run on main with these results, as if a push had produced them. */
+function record(store: Store, results: Record<string, "passed" | "failed">) {
+  const run = store.createRun("demo", "main", "seed", Object.keys(results));
+  store.finishRun(run.id, {
+    status: "failed", buildLog: "", testerLog: "",
+    results: Object.entries(results).map(([slug, status]) => ({ slug, status, log: "", failureLine: null })),
+  });
+}
+
+describe("single-stage runs", () => {
+  test("stage option runs only that stage", async () => {
+    const { store, push } = await setup();
+    await withEnv({ FAKE_FAIL_AT: "2" }, async () => {
+      await push("demo");
+      await push("demo", "main", [], ["stage=2"]);
+    });
+    expect(store.getRun(2)!.stagesRequested).toEqual(["ia4"]);
+  });
+
+  test("invalid stage option runs nothing and says why", async () => {
+    const { store, push } = await setup();
+    await withEnv({ FAKE_FAIL_AT: "2" }, () => push("demo")); // current stage 2
+    const cases: [string, string][] = [
+      ["stage=0", "anvil: no stage 0 in this course (1–3)"],
+      ["stage=99", "anvil: no stage 99 in this course (1–3)"],
+      ["stage=abc", "anvil: stage must be a whole number"],
+      ["stage=3", "anvil: stage 3 is locked; pass stage 2 first"],
+    ];
+    for (const [option, message] of cases) {
+      const out: string[] = [];
+      await push("demo", "main", out, [option]);
+      expect(out.join("\n")).toContain(message);
+    }
+    expect(store.latestRun("demo")!.id).toBe(1);
+  });
+
+  test("unknown push options are reported and ignored", async () => {
+    const { store, push } = await setup();
+    const out: string[] = [];
+    await push("demo", "main", out, ["foo=bar"]);
+    expect(out.join("\n")).toContain("anvil: ignoring unknown push option foo=bar");
+    expect(store.latestRun("demo")!.status).toBe("passed");
+  });
+
+  test("stage locked when the job starts ends as error", async () => {
+    const { deps, store, sha } = await setup();
+    record(store, { at4: "passed", ia4: "passed" }); // current stage 3, unlocked
+    const gate = Promise.withResolvers<void>();
+    deps.queues.enqueue("http-server", () => gate.promise);
+    const out: string[] = [];
+    const { runId, done } = startRun(deps, "demo", { branch: "main", sha, stage: 3 }, (l) => out.push(l));
+    record(store, { at4: "failed" }); // a run ahead moved current back to 1; stage 3 has no result
+    gate.resolve();
+    await done;
+    const run = store.getRun(runId)!;
+    expect(run.status).toBe("error");
+    expect(run.testerLog).toContain("stage 3 is locked; pass stage 1 first");
+    expect(out.join("\n")).toContain("anvil: stage 3 is locked; pass stage 1 first");
+  });
+
+  test("summary lines are published before the finished run", async () => {
+    const { deps, events, sha } = await setup();
+    const seen: string[] = [];
+    events.subscribeLines("demo", (e) => seen.push(`line:${e.line}`));
+    events.subscribe("demo", (e) => seen.push(`run:${e.run.status}`));
+    await startRun(deps, "demo", { branch: "main", sha }, () => {}).done;
+    const lastSummary = seen.findLastIndex((s) => s.startsWith("line:All stages pass"));
+    const finished = seen.indexOf("run:passed");
+    expect(lastSummary).toBeGreaterThan(-1);
+    expect(lastSummary).toBeLessThan(finished);
+  });
+
+  test("the finished run is published even if the summary fails", async () => {
+    const { deps, events, sha } = await setup();
+    deps.viewUrl = () => {
+      throw new Error("boom");
+    };
+    const statuses: string[] = [];
+    events.subscribe("demo", (e) => statuses.push(e.run.status));
+    const { runId, done } = startRun(deps, "demo", { branch: "main", sha }, () => {});
+    await done;
+    expect(statuses.at(-1)).toBe("passed");
+    expect(events.bufferedLines("demo").filter((l) => l.runId === runId)).toEqual([]);
+  });
+
+  test("working-tree run says progress does not move", async () => {
+    const { deps, store, sha } = await setup();
+    const out: string[] = [];
+    await startRun(deps, "demo", { branch: WORKING_TREE, sha }, (l) => out.push(l)).done;
+    expect(out).toContain("Working tree: tested, but only pushes to main move progress.");
+    expect(store.latestStageResults("demo").size).toBe(0);
+  });
+
+  test("startRun output lines are published as log events with the run id", async () => {
+    const { deps, events, sha } = await setup();
+    const ids = new Set<number>();
+    events.subscribeLines("demo", (e) => ids.add(e.runId));
+    const { runId, done } = startRun(deps, "demo", { branch: "main", sha }, () => {});
+    await done;
+    expect([...ids]).toEqual([runId]);
+  });
+});
+
 describe("handlePush", () => {
   test("first push runs every stage (baseline); later pushes run stages 1..current", async () => {
     const { store, push } = await setup();
@@ -55,6 +158,14 @@ describe("handlePush", () => {
     });
     expect(store.getRun(1)!.stagesRequested).toEqual(["at4", "ia4", "ih0"]);
     expect(store.getRun(2)!.stagesRequested).toEqual(["at4", "ia4"]);
+  });
+
+  test("a push to another branch says only main moves progress and leaves progress alone", async () => {
+    const { store, push } = await setup();
+    const out: string[] = [];
+    await withEnv({ FAKE_FAIL_AT: "2" }, () => push("demo", "feature", out));
+    expect(out.join("\n")).toContain("Branch feature: tested, but only pushes to main move progress.");
+    expect(store.latestStageResults("demo").size).toBe(0);
   });
 
   test("baseline on a repo failing stage 2 makes stage 2 current and says why", async () => {

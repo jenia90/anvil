@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { executeRun } from "../src/runner";
@@ -146,5 +146,26 @@ describe("executeRun", () => {
     const { outcome } = await run({ compileScript, commitDate: "2020-01-01T00:00:00Z" });
     const mtime = Number(/mtime=(\d+)/.exec(outcome.buildLog)![1]);
     expect(Date.now() / 1000 - mtime).toBeLessThan(60);
+  });
+
+  test("runs from an archive", async () => {
+    const { workDir, sha } = await makeFixtureRepo();
+    const archive = join(mkdtempSync(join(tmpdir(), "tar-")), "tree.tar");
+    expect(Bun.spawnSync(["tar", "-c", "-f", archive, "-C", workDir, ".codecrafters", "your_program.sh"]).exitCode).toBe(0);
+    const outcome = await executeRun({
+      bareRepoDir: "/nonexistent", sha, archive, testerPath: fakeTester, cases, emit: () => {}, onPhase: () => {},
+    });
+    expect(outcome.status).toBe("passed");
+    expect(outcome.buildLog).toContain("compiling fixture");
+  });
+
+  test("a broken archive ends as error", async () => {
+    const archive = join(mkdtempSync(join(tmpdir(), "tar-")), "tree.tar");
+    writeFileSync(archive, "not a tar");
+    const outcome = await executeRun({
+      bareRepoDir: "/nonexistent", sha: "0".repeat(40), archive, testerPath: fakeTester, cases, emit: () => {}, onPhase: () => {},
+    });
+    expect(outcome.status).toBe("error");
+    expect(outcome.buildLog).toContain("could not unpack the working tree");
   });
 });

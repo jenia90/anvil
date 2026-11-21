@@ -140,3 +140,29 @@ describe("addRepoEntry", () => {
     expect(load(out)).toEqual({ port: 1, repos: [repo] });
   });
 });
+
+describe("hint config", () => {
+  const noClaude = () => null;
+  const withClaude = (cmd: string) => (cmd === "claude" ? "/usr/bin/claude" : null);
+
+  test("hint command from config", async () => {
+    const cfg = await loadConfig(writeConfig(`hint:\n  command: ollama run qwen\n  maxPromptKB: 40\n${base}`), undefined, noClaude);
+    expect(cfg.hint).toEqual({ command: "ollama run qwen", maxPromptBytes: 40 * 1024 });
+  });
+
+  test("hint false turns hints off", async () => {
+    expect((await loadConfig(writeConfig(`hint: false\n${base}`), undefined, withClaude)).hint).toBeNull();
+  });
+
+  test("hint defaults to claude -p when claude is on PATH", async () => {
+    expect((await loadConfig(writeConfig(base), undefined, withClaude)).hint).toEqual({ command: "claude -p", maxPromptBytes: 150 * 1024 });
+    expect((await loadConfig(writeConfig(base), undefined, noClaude)).hint).toBeNull();
+  });
+
+  test("bad hint config is an error", async () => {
+    for (const bad of ['hint:\n  command: ""', "hint:\n  command: 3", "hint:\n  command: x\n  maxPromptKB: 0", "hint: yes please"]) {
+      await expect(loadConfig(writeConfig(`${bad}\n${base}`), undefined, noClaude)).rejects.toThrow(/hint/);
+    }
+  });
+});
+

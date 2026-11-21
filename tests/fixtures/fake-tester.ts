@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Stand-in for a course tester: prints each case in the real log shape.
-// FAKE_FAIL_AT=<n> fails the nth case; FAKE_CRASH=1 exits 2 silently; FAKE_HANG=1 never exits;
+// FAKE_FAIL_AT=<n> (or a fail-at file in the submission) fails the nth case; FAKE_CRASH=1 exits 2 silently; FAKE_HANG=1 never exits;
 // FAKE_ENV_DUMP=<file> records the submission dir, whether compile.sh exists, TESTER_DIR and your_program.sh; FAKE_DELAY_MS sleeps per case.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -10,8 +10,10 @@ if (process.env.FAKE_HANG === "1") await new Promise(() => {});
 const cases: { slug: string; tester_log_prefix: string; title: string }[] = JSON.parse(
   process.env.CODECRAFTERS_TEST_CASES_JSON ?? "[]",
 );
-const failAt = Number(process.env.FAKE_FAIL_AT ?? 0);
 const dir = process.env.CODECRAFTERS_SUBMISSION_DIR ?? "";
+// A `fail-at` file in the submission works like FAKE_FAIL_AT, so tests can fail on code (not on the environment).
+const failFile = `${dir}/fail-at`;
+const failAt = Number(process.env.FAKE_FAIL_AT ?? (existsSync(failFile) ? readFileSync(failFile, "utf8").trim() : 0));
 // FAKE_SHIM_DUMP=<file> records where grep, pwd and sudo resolve on PATH, and what `sudo id -u` prints.
 if (process.env.FAKE_SHIM_DUMP) {
   const which = (cmd: string) => Bun.which(cmd) ?? "";

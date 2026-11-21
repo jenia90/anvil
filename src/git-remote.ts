@@ -23,11 +23,21 @@ export function ensureBareRepo(dataDir: string, repoName: string, appPort: numbe
     git(dirname(dir), "init", "--bare", "-q", "-b", "main", dir);
   }
   git(dir, "config", "http.receivepack", "true");
+  git(dir, "config", "receive.advertisePushOptions", "true"); // git push -o stage=N
   const hook = join(dir, "hooks/post-receive");
   writeFileSync(
     hook,
     `#!/bin/sh
-curl --no-buffer -sS -X POST -H "x-anvil-token: ${hookToken}" --data-binary @- "http://127.0.0.1:${appPort}/internal/post-receive/${repoName}" \\
+# Push options (git push -o stage=N) go to the app as numbered headers; git forbids newlines in them.
+set --
+i=0
+while [ "$i" -lt "\${GIT_PUSH_OPTION_COUNT:-0}" ]; do
+  eval "opt=\\\${GIT_PUSH_OPTION_$i}"
+  opt=$(printf '%s' "$opt" | tr -d '\\r') # git allows a CR (from CRLF scripts); in a header it would drop the push
+  set -- "$@" -H "x-anvil-push-option-$i: $opt"
+  i=$((i + 1))
+done
+curl --no-buffer -sS -X POST -H "x-anvil-token: ${hookToken}" "$@" --data-binary @- "http://127.0.0.1:${appPort}/internal/post-receive/${repoName}" \\
   || echo "anvil: could not reach the app" >&2
 exit 0
 `,
@@ -114,6 +124,43 @@ export async function serveGit(req: Request, reposRoot: string): Promise<Respons
     },
   });
   return new Response(body, { status, headers });
+}
+
+/** The commit `main` points to in the repo's remote, or null before the first push to main. */
+export function mainHead(dataDir: string, repoName: string): string | null {
+  const dir = bareRepoDir(dataDir, repoName);
+  if (!existsSync(dir)) return null;
+  const p = Bun.spawnSync(["git", "--git-dir", dir, "rev-parse", "--verify", "-q", "refs/heads/main"]);
+  return p.exitCode === 0 ? p.stdout.toString().trim() : null;
+}
+
+export type CommitDiff =
+  | { files: { path: string; added: number | null; removed: number | null }[]; patch: string; truncated: boolean }
+  | { missing: true };
+
+/**
+ * What changed from `base` to `head` in the repo's remote: per-file line counts (null for binary files) and the patch,
+ * cut at the last whole line within `capBytes`. `missing` when git cannot diff them (a commit was garbage-collected).
+ */
+export function diffCommits(dataDir: string, repoName: string, base: string, head: string, capBytes: number): CommitDiff {
+  const run = (...args: string[]) =>
+    Bun.spawnSync(["git", "--git-dir", bareRepoDir(dataDir, repoName), "diff", "--no-color", ...args, base, head, "--"]);
+  const numstat = run("--numstat");
+  const full = run();
+  if (numstat.exitCode !== 0 || full.exitCode !== 0) return { missing: true };
+  const files = numstat.stdout
+    .toString()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [added, removed, ...path] = line.split("\t");
+      return { path: path.join("\t"), added: added === "-" ? null : Number(added), removed: removed === "-" ? null : Number(removed) };
+    });
+  const bytes = full.stdout;
+  if (bytes.length <= capBytes) return { files, patch: bytes.toString(), truncated: false };
+  const cut = bytes.subarray(0, capBytes);
+  const end = cut.lastIndexOf(10); // never split a line (or a UTF-8 character)
+  return { files, patch: new TextDecoder().decode(cut.subarray(0, end < 0 ? 0 : end + 1)), truncated: true };
 }
 
 /** Whether the repo's remote has any commit (a course started from the web app is seeded with the starter). */

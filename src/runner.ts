@@ -7,6 +7,8 @@ import { type CaseResult, type TestCase, parseTesterLog } from "./tester-log";
 export type RunInput = {
   bareRepoDir: string;
   sha: string;
+  /** A tar of a working tree (`anvil test`): unpacked instead of checking out `sha`. */
+  archive?: string;
   testerPath: string;
   cases: TestCase[];
   emit: (line: string) => void;
@@ -128,11 +130,20 @@ export async function executeRun(input: RunInput): Promise<RunOutcome> {
 
   let phase: "building" | "testing" = "building";
   try {
-    const archive = Bun.spawn(["git", "--git-dir", input.bareRepoDir, "archive", input.sha], { stdout: "pipe", stderr: "pipe" });
+    if (input.archive) {
+      const unpack = Bun.spawn(["tar", "-x", "-m", "-f", input.archive, "-C", dir], { stderr: "pipe" });
+      if ((await unpack.exited) !== 0) {
+        build.add(`could not unpack the working tree: ${await new Response(unpack.stderr).text()}`.trim());
+        return outcome("error");
+      }
+    }
+    const archive = input.archive
+      ? null
+      : Bun.spawn(["git", "--git-dir", input.bareRepoDir, "archive", input.sha], { stdout: "pipe", stderr: "pipe" });
     // -m: stamp files with now, not the commit date; otherwise cargo reuses a stale binary built from a newer commit
-    const tar = Bun.spawn(["tar", "-x", "-m", "-C", dir], { stdin: archive.stdout, stderr: "pipe" });
-    const [archiveCode, tarCode] = await Promise.all([archive.exited, tar.exited]);
-    if (archiveCode !== 0 || tarCode !== 0) {
+    const tar = archive && Bun.spawn(["tar", "-x", "-m", "-C", dir], { stdin: archive.stdout, stderr: "pipe" });
+    const [archiveCode, tarCode] = archive && tar ? await Promise.all([archive.exited, tar.exited]) : [0, 0];
+    if (archive && (archiveCode !== 0 || tarCode !== 0)) {
       build.add(`could not check out ${input.sha}: ${await new Response(archive.stderr).text()}`.trim());
       return outcome("error");
     }

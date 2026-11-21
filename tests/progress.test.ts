@@ -36,6 +36,30 @@ describe("stageViews", () => {
   });
 });
 
+describe("stageViews locked", () => {
+  const locked = (o: Record<string, StageStatus>) => stageViews(course, results(o)).map((v) => v.locked);
+
+  test("fresh repo locks everything after stage 1", () => {
+    expect(locked({})).toEqual([false, true, true]);
+  });
+
+  test("mid-course locks stages after current", () => {
+    expect(locked({ at4: "passed", ia4: "failed" })).toEqual([false, false, true]);
+  });
+
+  test("regression keeps reached stages unlocked", () => {
+    expect(locked({ at4: "failed", ia4: "passed", ih0: "passed" })).toEqual([false, false, false]);
+  });
+
+  test("catch-up unlocks every stage with a result", () => {
+    expect(locked({ at4: "passed", ia4: "passed", ih0: "failed" })).toEqual([false, false, false]);
+  });
+
+  test("nothing is locked when all pass", () => {
+    expect(locked({ at4: "passed", ia4: "passed", ih0: "passed" })).toEqual([false, false, false]);
+  });
+});
+
 describe("stagesToRun", () => {
   test("with no results at all it returns every stage (baseline)", () => {
     expect(stagesToRun(course, results({})).map((s) => s.index)).toEqual([1, 2, 3]);

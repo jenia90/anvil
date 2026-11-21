@@ -1,9 +1,12 @@
 import type { Catalog } from "./catalog";
 import { type Config, appUrl } from "./config";
-import type { RunEvents } from "./events";
-import { hasCommits, remoteUrl } from "./git-remote";
+import type { LogEvent, RunEvents } from "./events";
+import { diffCommits, hasCommits, mainHead, remoteUrl } from "./git-remote";
+import { HINT_TIMEOUT_MS, type HintLevel, buildHintPrompt, gatherCode, runHintCommand } from "./hints";
+import { stageStats } from "./stats";
 import { renderStageMd } from "./course";
 import { currentStageIndex, stageViews } from "./progress";
+import { RunRequestError, UnknownRepoError, WORKING_TREE } from "./pushes";
 import { StartCourseError } from "./start-course";
 import type { RunRecord, Store } from "./store";
 
@@ -15,6 +18,10 @@ export type ApiDeps = {
   port: () => number;
   catalog: { get(): Promise<Catalog> };
   startCourse: (course: string, language: string) => Promise<{ name: string; cloneUrl: string }>;
+  /** Runs the head of main again: all stages up to the current one, or only `stage`. */
+  startRun: (repo: string, stage: number | undefined) => { runId: number };
+  /** How long a hint command may run (tests shorten it). */
+  hintTimeoutMs?: number;
 };
 
 export const toSummary = ({ buildLog: _b, testerLog: _t, ...rest }: RunRecord): RunSummary => rest;
@@ -22,9 +29,13 @@ export const toSummary = ({ buildLog: _b, testerLog: _t, ...rest }: RunRecord): 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const notFound = (what: string) => json({ error: `unknown ${what}` }, 404);
 
+/** Largest patch the diff endpoint returns (bytes); bigger ones are cut and flagged. */
+const DIFF_CAP = 200 * 1024;
+
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function apiRoutes({ config, store, events, port, catalog, startCourse }: ApiDeps) {
+export function apiRoutes({ config, store, events, port, catalog, startCourse, startRun, hintTimeoutMs = HINT_TIMEOUT_MS }: ApiDeps) {
+  let hintBusy = false; // one hint at a time: a local model may need the whole machine
   // A repo's remote never loses its commits, so once seen they need no further git call.
   const seeded = new Set<string>();
   const hasCommitsCached = (name: string) => {
@@ -104,14 +115,128 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse }:
         cloneCommand: hasCommitsCached(found.repo.name)
           ? `git clone ${url} codecrafters-${found.repo.course}-${found.repo.language}`
           : null,
+        canRun: mainHead(config.dataDir, found.repo.name) !== null,
+        hints: config.hint !== null,
         currentIndex: currentStageIndex(found.course, latest),
         stages: stageViews(found.course, latest).map((v) => ({
           index: v.stage.index, slug: v.stage.slug, name: v.stage.name, difficulty: v.stage.difficulty,
-          extension: v.stage.extension, descriptionMd: renderStageMd(v.stage.descriptionMd, found.repo.language),
-          state: v.state, lastResult: v.lastResult,
+          extension: v.stage.extension,
+          // Locked stages never send their text, so it cannot be read ahead from the page or the API.
+          descriptionMd: v.locked ? "" : renderStageMd(v.stage.descriptionMd, found.repo.language),
+          state: v.state, lastResult: v.lastResult, locked: v.locked,
         })),
         latestRun: run ? toSummary(run) : null,
       });
+    },
+
+    "/api/activity": () => json({ runTimes: store.runTimes() }),
+
+    "/api/repos/:repo/stats": (req: Request & { params: { repo: string } }) => {
+      const found = lookup(req.params.repo);
+      if (!found) return notFound("repo");
+      const counts = store.runCounts(found.repo.name);
+      return json({
+        runTimes: store.runTimes(found.repo.name),
+        totalRuns: counts.total, finishedRuns: counts.finished, passedRuns: counts.passed,
+        stages: stageStats(found.course, store.mainRuns(found.repo.name)),
+      });
+    },
+
+    "/api/repos/:repo/runs/:id/hint": {
+      POST: async (req: Request & { params: { repo: string; id: string } }) => {
+        const found = lookup(req.params.repo);
+        if (!found) return notFound("repo");
+        const run = store.getRun(Number(req.params.id));
+        if (!run || run.repo !== found.repo.name) return notFound("run");
+        if (!req.headers.get("content-type")?.startsWith("application/json")) {
+          return json({ error: "expected content-type application/json" }, 415);
+        }
+        const hint = config.hint;
+        if (!hint) return json({ error: "hints are not set up: add hint.command to anvil.yml" }, 409);
+        const body = (await req.json().catch(() => null)) as { stage?: unknown; level?: unknown; previous?: unknown } | null;
+        const failed = run.stageResults.find((r) => r.stageSlug === body?.stage && r.status === "failed");
+        const stage = found.course.stages.find((s) => s.slug === body?.stage);
+        const previous = Array.isArray(body?.previous) ? body.previous.filter((p): p is string => typeof p === "string") : [];
+        if (!failed || !stage || ![1, 2, 3].includes(body?.level as number)) {
+          return json({ error: "expected JSON {stage: <slug of a stage that failed in this run>, level: 1|2|3, previous: string[]}" }, 400);
+        }
+        if (hintBusy) return json({ error: "a hint is already being written; try again when it is done" }, 409);
+        hintBusy = true;
+        try {
+          const workingTree = run.branch === WORKING_TREE;
+          const base = workingTree ? null : store.lastPassingCommit(found.repo.name, stage.slug, run.id);
+          const diff = base && base !== run.commitSha ? diffCommits(config.dataDir, found.repo.name, base, run.commitSha, DIFF_CAP) : null;
+          const changed = diff && !("missing" in diff) ? diff.files.map((f) => f.path) : [];
+          const code = workingTree ? { files: [], skipped: [], notRead: [] } : gatherCode(config.dataDir, found.repo.name, run.commitSha, changed, hint.maxPromptBytes);
+          const prompt = buildHintPrompt({
+            language: found.repo.language,
+            stage: { index: stage.index, name: stage.name, descriptionMd: renderStageMd(stage.descriptionMd, found.repo.language, true) },
+            log: failed.log, diff: diff && !("missing" in diff) ? diff.patch : null, files: code.files, skipped: code.skipped, notRead: code.notRead,
+            workingTree, level: body!.level as HintLevel, previous, maxBytes: hint.maxPromptBytes,
+          });
+          const stream = runHintCommand(hint.command, prompt, hintTimeoutMs, () => void (hintBusy = false));
+          return new Response(stream, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-cache" } });
+        } catch (e) {
+          hintBusy = false;
+          return json({ error: `could not start the hint: ${errorText(e)}` }, 500);
+        }
+      },
+    },
+
+    "/api/repos/:repo/runs/:id/diff": (req: Request & { params: { repo: string; id: string } }) => {
+      const found = lookup(req.params.repo);
+      if (!found) return notFound("repo");
+      const run = store.getRun(Number(req.params.id));
+      if (!run || run.repo !== found.repo.name) return notFound("run");
+      // The recorded commit of a working-tree run is not what was tested: a diff against it would mislead.
+      if (run.branch === WORKING_TREE) return json({ error: "working-tree runs have no diff" }, 400);
+      const slug = new URL(req.url).searchParams.get("stage");
+      if (!slug || !run.stageResults.some((r) => r.stageSlug === slug && r.status === "failed")) {
+        return json({ error: "expected ?stage=<slug> of a stage that failed in this run" }, 400);
+      }
+      const base = store.lastPassingCommit(found.repo.name, slug, run.id);
+      if (base === null) return json({ base: null });
+      if (base === run.commitSha) return json({ base, files: [], patch: "", truncated: false });
+      return json({ base, ...diffCommits(config.dataDir, found.repo.name, base, run.commitSha, DIFF_CAP) });
+    },
+
+    "/api/repos/:repo/runs": {
+      GET: (req: Request & { params: { repo: string } }) => {
+        const found = lookup(req.params.repo);
+        if (!found) return notFound("repo");
+        const params = new URL(req.url).searchParams;
+        const limit = Number(params.get("limit") ?? 50);
+        const before = params.has("before") ? Number(params.get("before")) : undefined;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200 || (before !== undefined && !Number.isInteger(before))) {
+          return json({ error: "expected limit 1–200 and an integer before" }, 400);
+        }
+        const indexBySlug = new Map(found.course.stages.map((s) => [s.slug, s.index]));
+        const page = store.listRuns(found.repo.name, { before, limit });
+        return json({
+          runs: page.runs.map(({ results, ...run }) => ({
+            ...run, results: results.map((r) => ({ stageIndex: indexBySlug.get(r.stageSlug) ?? 0, status: r.status })),
+          })),
+          more: page.more,
+        });
+      },
+      POST: async (req: Request & { params: { repo: string } }) => {
+        if (!lookup(req.params.repo)) return notFound("repo");
+        // JSON only, like POST /api/repos: a cross-site form cannot send it without a preflight this server refuses.
+        if (!req.headers.get("content-type")?.startsWith("application/json")) {
+          return json({ error: "expected content-type application/json" }, 415);
+        }
+        const body = (await req.json().catch(() => null)) as { stage?: unknown } | null;
+        if (body === null || typeof body !== "object" || (body.stage !== undefined && typeof body.stage !== "number")) {
+          return json({ error: "expected JSON {stage?: number}" }, 400);
+        }
+        try {
+          return json(startRun(req.params.repo, body.stage as number | undefined), 202);
+        } catch (e) {
+          if (e instanceof UnknownRepoError) return notFound("repo");
+          if (e instanceof RunRequestError) return json({ error: e.message }, e.status);
+          return json({ error: errorText(e) }, 500);
+        }
+      },
     },
 
     "/api/repos/:repo/runs/:id": (req: Request & { params: { repo: string; id: string } }) => {
@@ -135,9 +260,18 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse }:
         start(controller) {
           const send = (run: RunRecord) =>
             controller.enqueue(encoder.encode(`event: run\ndata: ${JSON.stringify(toSummary(run))}\n\n`));
+          const sendLine = (e: LogEvent) =>
+            controller.enqueue(encoder.encode(`event: log\ndata: ${JSON.stringify({ runId: e.runId, line: e.line })}\n\n`));
           const latest = store.latestRun(found.repo.name);
           if (latest) send(latest);
-          const off = events.subscribe(found.repo.name, (e) => send(e.run));
+          // A page opened mid-run first gets the lines printed so far.
+          for (const line of events.bufferedLines(found.repo.name)) sendLine(line);
+          const offRuns = events.subscribe(found.repo.name, (e) => send(e.run));
+          const offLines = events.subscribeLines(found.repo.name, sendLine);
+          const off = () => {
+            offRuns();
+            offLines();
+          };
           const keepAlive = setInterval(() => controller.enqueue(encoder.encode(": keep-alive\n\n")), 15000);
           cleanup = () => {
             off();
