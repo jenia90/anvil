@@ -1,0 +1,14 @@
+port: 4300            # optional, default 4300
+dataDir: ./data       # optional, default ./data (beside this file)
+# url: https://my-machine.my-tailnet.ts.net   # optional: another address anvil is reached at (see README)
+repos:
+  - name: redis-rust         # lowercase letters, digits and dashes
+    course: redis            # a CodeCrafters course slug: downloaded from github.com/codecrafters-io on first start
+    language: rust           # picks the language-specific parts of the stage instructions
+  - name: shell-rust
+    course: shell
+    language: rust
+# Optional: use a course from local paths instead of downloading it.
+# courses:
+#   - definition: /path/to/build-your-own-redis   # a course repo folder, or a single-file course_definition.yml
+#     tester: /path/to/tester                     # the tester binary; TESTER_DIR is set to its folder

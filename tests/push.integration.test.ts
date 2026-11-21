@@ -1,0 +1,117 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Config, loadConfig } from "../src/config";
+import { RunEvents } from "../src/events";
+import { bareRepoDir, ensureBareRepo, remoteUrl } from "../src/git-remote";
+import { SerialQueues } from "../src/queue";
+import { startServer } from "../src/server";
+import { Store } from "../src/store";
+import { git, makeFixtureRepo } from "./helpers";
+
+const TOKEN = "test-token";
+const stops: (() => void)[] = [];
+afterEach(() => {
+  while (stops.length) stops.pop()!();
+});
+
+async function boot() {
+  const base = await loadConfig(join(import.meta.dir, "fixtures/config.yml"));
+  const dataDir = mkdtempSync(join(tmpdir(), "int-"));
+  const config: Config = { ...base, dataDir };
+  const store = new Store(":memory:");
+  let port = 0;
+  const server = startServer({
+    config, store, events: new RunEvents(), queues: new SerialQueues(), dataDir, port: 0, hookToken: TOKEN,
+    viewUrl: (repo, i) => `http://127.0.0.1:${port}/r/${repo}/${i}`,
+    catalog: { get: async () => ({ fetchedAt: 0, stale: false, courses: [] }) },
+    startCourse: async () => {
+      throw new Error("not used here");
+    },
+  });
+  port = server.port;
+  stops.push(server.stop);
+  ensureBareRepo(dataDir, "demo", server.port, TOKEN);
+  const { workDir } = await makeFixtureRepo();
+  return { server, store, dataDir, workDir, url: remoteUrl(`http://127.0.0.1:${server.port}`, "demo") };
+}
+
+async function push(workDir: string, url: string, env: Record<string, string> = {}) {
+  const saved = { ...process.env };
+  Object.assign(process.env, env);
+  try {
+    const p = Bun.spawn(["git", "push", url, "HEAD:refs/heads/main"], { cwd: workDir, stdout: "pipe", stderr: "pipe" });
+    const [stderr, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+    return { stderr, code };
+  } finally {
+    for (const k of Object.keys(env)) k in saved ? (process.env[k] = saved[k]) : delete process.env[k];
+  }
+}
+
+describe("ensureBareRepo", () => {
+  test("is idempotent and rewrites the hook port", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "bare-"));
+    ensureBareRepo(dataDir, "demo", 1111, "old-token");
+    const dir = ensureBareRepo(dataDir, "demo", 2222, "new-token");
+    expect(dir).toBe(bareRepoDir(dataDir, "demo"));
+    const hook = join(dir, "hooks/post-receive");
+    expect(readFileSync(hook, "utf8")).toContain("127.0.0.1:2222/internal/post-receive/demo");
+    expect(readFileSync(hook, "utf8")).not.toContain("1111");
+    expect(readFileSync(hook, "utf8")).toContain("new-token");
+    expect(readFileSync(hook, "utf8")).not.toContain("old-token");
+    expect(statSync(hook).mode & 0o100).not.toBe(0);
+    expect(statSync(hook).mode & 0o077).toBe(0);
+    expect(git(dir, "config", "http.receivepack")).toBe("true");
+  });
+});
+
+describe("git push to the app", () => {
+  test("prints remote: lines with the stage results", async () => {
+    const { workDir, url } = await boot();
+    const { stderr, code } = await push(workDir, url);
+    expect(code).toBe(0);
+    expect(stderr).toContain("remote:");
+    expect(stderr).toContain("Stage 1: Bind to a port");
+  });
+
+  test("a push is accepted when a stage fails", async () => {
+    const { workDir, url, store } = await boot();
+    const { stderr, code } = await push(workDir, url, { FAKE_FAIL_AT: "2" });
+    expect(code).toBe(0);
+    expect(stderr).toContain("Expected status code 200, got 404");
+    expect(store.latestRun("demo")!.status).toBe("failed");
+  });
+
+  test("a 2 MB binary push works", async () => {
+    const { workDir, url, store } = await boot();
+    writeFileSync(join(workDir, "big.bin"), crypto.getRandomValues(new Uint8Array(2 * 1024 * 1024)));
+    git(workDir, "add", "big.bin");
+    git(workDir, "commit", "-q", "-m", "big");
+    const { code } = await push(workDir, url);
+    expect(code).toBe(0);
+    expect(store.latestRun("demo")!.status).toBe("passed");
+  });
+
+  test("the server listens on 127.0.0.1 only", async () => {
+    const { server } = await boot();
+    expect(server.hostname).toBe("127.0.0.1");
+  });
+
+  test("the hook endpoint 404s for an unknown repo", async () => {
+    const { server } = await boot();
+    const res = await fetch(`http://127.0.0.1:${server.port}/internal/post-receive/nope`, {
+      method: "POST", body: "", headers: { "x-anvil-token": TOKEN },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("the hook endpoint refuses a missing or wrong token", async () => {
+    const { server, store } = await boot();
+    const url = `http://127.0.0.1:${server.port}/internal/post-receive/demo`;
+    const body = `${"0".repeat(40)} ${"a".repeat(40)} refs/heads/main\n`;
+    expect((await fetch(url, { method: "POST", body })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", body, headers: { "x-anvil-token": "wrong" } })).status).toBe(403);
+    expect(store.latestRun("demo")).toBeNull();
+  });
+});

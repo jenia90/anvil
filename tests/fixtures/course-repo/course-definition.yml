@@ -1,0 +1,19 @@
+slug: "redis"
+name: "Build your own Redis"
+short_name: "Redis"
+description_md: |-
+  In-memory store.
+extensions:
+  - slug: "lists"
+    name: "Lists"
+stages:
+  - slug: "jm1"
+    name: "Bind to a port"
+    difficulty: very_easy
+  - slug: "rg2"
+    name: "Respond to PING"
+    difficulty: easy
+  - slug: "mh6"
+    primary_extension_slug: "lists"
+    name: "Create a list"
+    difficulty: easy

@@ -1,0 +1,8 @@
+slug: "sparse"
+name: "Sparse course"
+short_name: "Sparse"
+stages:
+  - slug: "aa1"
+    name: "Full stage"
+    description_md: "Has text."
+  - slug: "bb2"

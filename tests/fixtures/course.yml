@@ -1,0 +1,24 @@
+slug: "http-server"
+name: "Build your own HTTP server"
+short_name: "HTTP server"
+description_md: |-
+  HTTP is the protocol that powers the web.
+stages:
+  - slug: "at4"
+    name: "Bind to a port"
+    difficulty: very_easy
+    description_md: |-
+      Create a TCP server that listens on port 4221.
+  - slug: "ia4"
+    name: "Respond with 200"
+    difficulty: very_easy
+    description_md: |-
+      Respond to `GET /` with a 200.
+  - slug: "ih0"
+    name: "Extract URL path"
+    difficulty: easy
+    description_md: |-
+      Respond 404 for unknown paths.
+extensions:
+  - slug: "xx1"
+    name: "Pipelining"

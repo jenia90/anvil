@@ -1,0 +1,24 @@
+Debug = true
+
+[33m[stage-1] [0m[94mRunning tests for Stage #1: Bind to a port[0m
+[33m[stage-1] [0m[36mRunning program[0m
+[33m[stage-1] [0m[94m$ ./your_program.sh[0m
+[33m[stage-1] [0m[94mConnecting to localhost:4221 using TCP[0m
+[33m[your_program] [0m[0m   Compiling codecrafters-http-server v0.1.0[0m
+[33m[stage-1] [0m[92mSuccess! Closing connection[0m
+[33m[stage-1] [0m[92mTest passed.[0m
+[33m[stage-1] [0m[36mTerminating program[0m
+[33m[stage-1] [0m[36mProgram terminated successfully[0m
+[33m[stage-2] [0m[94mRunning tests for Stage #2: Respond with 200[0m
+[33m[stage-2] [0m[36mRunning program[0m
+[33m[stage-2] [0m[94m$ ./your_program.sh[0m
+[33m[stage-2] [0m[94mConnected to localhost port 4221[0m
+[33m[your_program] [0m[0maccepted connection from <script>alert(1)</script>[0m
+[33m[stage-2] [0m[94m> GET / HTTP/1.1[0m
+[33m[stage-2] [0m[94m> Host: localhost:4221[0m
+[33m[stage-2] [0m[94mReceived bytes: "HTTP/1.1 404 Not Found\r\n\r\n"[0m
+[33m[your_program] [0m[0mhandled request[0m
+[33m[stage-2] [0m[91mExpected status code 200, got 404[0m
+[33m[stage-2] [0m[91mTest failed[0m
+[33m[stage-2] [0m[36mTerminating program[0m
+[33m[stage-2] [0m[36mProgram terminated successfully[0m

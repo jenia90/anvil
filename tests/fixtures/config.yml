@@ -1,0 +1,7 @@
+courses:
+  - definition: ./course.yml
+    tester: ./fake-tester.ts
+repos:
+  - name: demo
+    course: http-server
+    language: rust
