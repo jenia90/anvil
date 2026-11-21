@@ -134,6 +134,35 @@ export function mainHead(dataDir: string, repoName: string): string | null {
   return p.exitCode === 0 ? p.stdout.toString().trim() : null;
 }
 
+export type CommitDiff =
+  | { files: { path: string; added: number | null; removed: number | null }[]; patch: string; truncated: boolean }
+  | { missing: true };
+
+/**
+ * What changed from `base` to `head` in the repo's remote: per-file line counts (null for binary files) and the patch,
+ * cut at the last whole line within `capBytes`. `missing` when git cannot diff them (a commit was garbage-collected).
+ */
+export function diffCommits(dataDir: string, repoName: string, base: string, head: string, capBytes: number): CommitDiff {
+  const run = (...args: string[]) =>
+    Bun.spawnSync(["git", "--git-dir", bareRepoDir(dataDir, repoName), "diff", "--no-color", ...args, base, head, "--"]);
+  const numstat = run("--numstat");
+  const full = run();
+  if (numstat.exitCode !== 0 || full.exitCode !== 0) return { missing: true };
+  const files = numstat.stdout
+    .toString()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [added, removed, ...path] = line.split("\t");
+      return { path: path.join("\t"), added: added === "-" ? null : Number(added), removed: removed === "-" ? null : Number(removed) };
+    });
+  const bytes = full.stdout;
+  if (bytes.length <= capBytes) return { files, patch: bytes.toString(), truncated: false };
+  const cut = bytes.subarray(0, capBytes);
+  const end = cut.lastIndexOf(10); // never split a line (or a UTF-8 character)
+  return { files, patch: new TextDecoder().decode(cut.subarray(0, end < 0 ? 0 : end + 1)), truncated: true };
+}
+
 /** Whether the repo's remote has any commit (a course started from the web app is seeded with the starter). */
 export function hasCommits(dataDir: string, repoName: string): boolean {
   const dir = bareRepoDir(dataDir, repoName);

@@ -109,4 +109,68 @@ describe("Store", () => {
     expect(second.getRun(run.id)!.status).toBe("passed");
     expect(second.latestStageResults("demo").get("at4")).toBe("passed");
   });
+
+  test("listRuns pages newest first with results", () => {
+    const store = new Store(":memory:");
+    for (let i = 0; i < 5; i++) finish(store, store.createRun("demo", "main", `c${i}`, ["at4"]).id, [result("at4", "passed")]);
+    store.createRun("other", "main", "z", []);
+    const first = store.listRuns("demo", { limit: 2 });
+    expect(first.runs.map((r) => r.id)).toEqual([5, 4]);
+    expect(first.more).toBe(true);
+    expect(first.runs[0].results).toEqual([{ stageSlug: "at4", status: "passed" }]);
+    expect((first.runs[0] as Record<string, unknown>).testerLog).toBeUndefined();
+    const next = store.listRuns("demo", { before: 4, limit: 3 });
+    expect(next.runs.map((r) => r.id)).toEqual([3, 2, 1]);
+    expect(next.more).toBe(false);
+  });
+
+  test("runTimes for one repo and all", () => {
+    const store = new Store(":memory:");
+    const a = store.createRun("demo", "main", "a", []);
+    const b = store.createRun("other", "dev", "b", []);
+    expect(store.runTimes("demo")).toEqual([a.createdAt]);
+    expect(store.runTimes()).toEqual([a.createdAt, b.createdAt]);
+  });
+
+  test("runCounts counts finished and passed", () => {
+    const store = new Store(":memory:");
+    finish(store, store.createRun("demo", "main", "a", []).id, [], "passed");
+    finish(store, store.createRun("demo", "x", "b", []).id, [], "failed");
+    store.createRun("demo", "main", "c", []);
+    expect(store.runCounts("demo")).toEqual({ total: 3, finished: 2, passed: 1 });
+  });
+
+  test("mainRuns lists main runs oldest first", () => {
+    const store = new Store(":memory:");
+    const a = store.createRun("demo", "main", "a", []);
+    store.createRun("demo", "feature", "b", []);
+    const c = store.createRun("demo", "main", "c", []);
+    expect(store.mainRuns("demo").map((r) => r.id)).toEqual([a.id, c.id]);
+  });
+
+  test("lastPassingCommit finds the newest earlier main pass", () => {
+    const store = new Store(":memory:");
+    finish(store, store.createRun("demo", "main", "old", []).id, [result("at4", "passed")]);
+    finish(store, store.createRun("demo", "main", "newer", []).id, [result("at4", "passed")]);
+    finish(store, store.createRun("demo", "feature", "branch", []).id, [result("at4", "passed")]);
+    const failing = store.createRun("demo", "main", "bad", []);
+    finish(store, failing.id, [result("at4", "failed")]);
+    finish(store, store.createRun("demo", "main", "later", []).id, [result("at4", "passed")]);
+    expect(store.lastPassingCommit("demo", "at4", failing.id)).toBe("newer");
+    expect(store.lastPassingCommit("demo", "ia4", failing.id)).toBeNull();
+  });
+
+  test("mainRuns stays fast for a long course history", () => {
+    const store = new Store(":memory:");
+    const slugs = Array.from({ length: 60 }, (_, i) => `s${i}`);
+    for (let i = 0; i < 3000; i++) {
+      const run = store.createRun("demo", "main", `c${i}`, slugs);
+      finish(store, run.id, slugs.map((s) => result(s, "passed")));
+    }
+    const start = performance.now();
+    const runs = store.mainRuns("demo");
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(runs.length).toBe(3000);
+    expect(runs[2999].results.length).toBe(60);
+  });
 });

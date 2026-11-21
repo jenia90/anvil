@@ -23,6 +23,11 @@ export type StageResultRecord = {
   failureLine: string | null;
 };
 
+/** A run without its logs, with its stage results: what lists and stats need. */
+export type RunListItem = Omit<RunRecord, "buildLog" | "testerLog"> & {
+  results: { stageSlug: string; status: StageStatus }[];
+};
+
 type RunRow = {
   id: number; repo: string; branch: string; commit_sha: string; status: RunStatus; stages_requested: string;
   created_at: number; finished_at: number | null; build_log: string; tester_log: string;
@@ -110,6 +115,79 @@ export class Store {
       )
       .all(repo);
     return new Map(rows.map((r) => [r.stage_slug, r.status]));
+  }
+
+  /**
+   * Runs matching `where` (newest or oldest first), without logs, with their stage results. Results are fetched with
+   * the same filter and grouped in one pass: a long history must not stall the (synchronous) database.
+   */
+  private listItems(where: string, params: (string | number)[], order: "ASC" | "DESC", limit = -1): RunListItem[] {
+    const rows = this.db
+      .query<Omit<RunRow, "build_log" | "tester_log">, (string | number)[]>(
+        `SELECT id, repo, branch, commit_sha, status, stages_requested, created_at, finished_at FROM runs
+         WHERE ${where} ORDER BY id ${order} LIMIT ${limit}`,
+      )
+      .all(...params);
+    if (rows.length === 0) return [];
+    const byRun = new Map<number, { stageSlug: string; status: StageStatus }[]>(rows.map((r) => [r.id, []]));
+    const results = this.db
+      .query<{ run_id: number; stage_slug: string; status: StageStatus }, (string | number)[]>(
+        `SELECT run_id, stage_slug, status FROM stage_results
+         WHERE run_id IN (SELECT id FROM runs WHERE ${where} ORDER BY id ${order} LIMIT ${limit}) ORDER BY rowid`,
+      )
+      .all(...params);
+    for (const r of results) byRun.get(r.run_id)?.push({ stageSlug: r.stage_slug, status: r.status });
+    return rows.map((r) => ({
+      id: r.id, repo: r.repo, branch: r.branch, commitSha: r.commit_sha, status: r.status,
+      stagesRequested: JSON.parse(r.stages_requested), createdAt: r.created_at, finishedAt: r.finished_at,
+      results: byRun.get(r.id)!,
+    }));
+  }
+
+  /** One page of a repo's runs, newest first, without logs. */
+  listRuns(repo: string, opts: { before?: number; limit: number }): { runs: RunListItem[]; more: boolean } {
+    const runs = this.listItems(
+      opts.before === undefined ? "repo = ?" : "repo = ? AND id < ?",
+      opts.before === undefined ? [repo] : [repo, opts.before],
+      "DESC",
+      opts.limit + 1,
+    );
+    return { runs: runs.slice(0, opts.limit), more: runs.length > opts.limit };
+  }
+
+  /** The repo's runs on main, oldest first, without logs (progress and stage stats count main only). */
+  mainRuns(repo: string): RunListItem[] {
+    return this.listItems("repo = ? AND branch = 'main'", [repo], "ASC");
+  }
+
+  /** When each run started (one repo, or every repo), oldest first. */
+  runTimes(repo?: string): number[] {
+    const rows =
+      repo === undefined
+        ? this.db.query<{ created_at: number }, []>("SELECT created_at FROM runs ORDER BY created_at").all()
+        : this.db.query<{ created_at: number }, [string]>("SELECT created_at FROM runs WHERE repo = ? ORDER BY created_at").all(repo);
+    return rows.map((r) => r.created_at);
+  }
+
+  runCounts(repo: string): { total: number; finished: number; passed: number } {
+    return this.db
+      .query<{ total: number; finished: number; passed: number }, [string]>(
+        `SELECT COUNT(*) AS total, COUNT(finished_at) AS finished,
+         COALESCE(SUM(status = 'passed'), 0) AS passed FROM runs WHERE repo = ?`,
+      )
+      .get(repo)!;
+  }
+
+  /** The commit of the newest main run before `beforeRunId` in which the stage passed. */
+  lastPassingCommit(repo: string, stageSlug: string, beforeRunId: number): string | null {
+    const row = this.db
+      .query<{ commit_sha: string }, [string, number, string]>(
+        `SELECT r.commit_sha FROM runs r JOIN stage_results sr ON sr.run_id = r.id
+         WHERE r.repo = ? AND r.branch = 'main' AND r.id < ? AND sr.stage_slug = ? AND sr.status = 'passed'
+         ORDER BY r.id DESC LIMIT 1`,
+      )
+      .get(repo, beforeRunId, stageSlug);
+    return row?.commit_sha ?? null;
   }
 
   failInterruptedRuns(): number {

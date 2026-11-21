@@ -4,7 +4,8 @@ import type { RunSummary } from "../src/api";
 import { FINISHED } from "../src/events";
 import type { Catalog, CatalogCourse } from "../src/catalog";
 import {
-  type RepoListItem, type RunDetail, advanceOf, apiErrorMessage, courseHue, coursesHtml, esc, faviconHref, flyoutHtml,
+  type DiffView, type RepoListItem, type RunDetail, type RunListItemView, type StatsView, activityHtml, advanceOf, diffHtml,
+  runRowHtml, statsHtml, apiErrorMessage, courseHue, coursesHtml, esc, faviconHref, flyoutHtml,
   followRun, footerHtml, keyAction, liveLineText, liveLogHtml, lockedHtml, navHtml, notificationText, progressHtml,
   repoCardsHtml, setupHtml, shortcutsHtml, sparksHtml, stripText, titlePrefix, toastHtml,
 } from "./render";
@@ -50,8 +51,16 @@ document.addEventListener("click", async (e) => {
   }, 1600);
 });
 
+/** A calendar wider than the screen scrolls; start it at the newest week. */
+const showToday = () => {
+  for (const c of document.querySelectorAll<HTMLElement>(".heatmap-scroll")) c.scrollLeft = c.scrollWidth;
+};
+
 async function homePage(): Promise<void> {
-  const repos = await getJson<RepoListItem[]>("/api/repos");
+  const [repos, activity] = await Promise.all([
+    getJson<RepoListItem[]>("/api/repos"),
+    getJson<{ runTimes: number[] }>("/api/activity"),
+  ]);
   const passed = repos.reduce((n, r) => n + r.passedCount, 0);
   app.innerHTML = `${navHtml("home")}
     <main class="page">
@@ -63,11 +72,13 @@ async function homePage(): Promise<void> {
         }</p>
         <a class="button" href="/courses">Start a course</a>
       </section>
+      ${activityHtml(activity.runTimes, Date.now())}
       <section>
         <h2 class="section-title">My repos</h2>
         ${repoCardsHtml(repos)}
       </section>
     </main>${footerHtml()}`;
+  showToday();
 }
 
 const skeletonCards = (n: number) =>
@@ -193,7 +204,7 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
     <div class="layout" style="--hue:${courseHue(detail.course.slug)}">
       <aside id="stage-list" class="sidebar"></aside>
       <main id="instructions">
-        <p class="crumbs"><a href="/">My repos</a> / <a href="/courses/${esc(detail.course.slug)}">${esc(detail.course.name)}</a> / ${esc(detail.name)}</p>
+        <p class="crumbs"><a href="/">My repos</a> / <a href="/courses/${esc(detail.course.slug)}">${esc(detail.course.name)}</a> / ${esc(detail.name)} · <a href="/r/${esc(repo)}/runs">History</a></p>
         <div id="setup"></div>
         <header class="stage-head"><p class="eyebrow">${meta}</p><div class="stage-title"><h1>${esc(stage.name)}</h1><button type="button" id="test-stage" class="ghost" hidden>Test this stage <kbd>t</kbd></button></div><p id="run-error" class="error" role="alert" hidden></p></header>
         <div id="stage-body"></div>
@@ -285,7 +296,7 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
     renderStrip();
   };
   const flyoutHeader = () =>
-    `<header><div><p class="eyebrow">${running() ? "Live output" : "Latest run"}</p><strong>${esc(
+    `<header><div><p class="eyebrow">${running() ? "Live output" : "Latest run"} · <a href="/r/${esc(repo)}/runs">History</a></p><strong>${esc(
       stripText(latest),
     )}</strong></div><button type="button" class="ghost" id="close-flyout" aria-label="Close">✕</button></header>`;
   const renderFlyout = async () => {
@@ -444,10 +455,92 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
   });
 }
 
+// Diffs in run details (stage page flyout and history rows) load when first opened. `toggle` does not bubble: capture.
+document.addEventListener(
+  "toggle",
+  async (e) => {
+    const details = e.target as HTMLElement;
+    if (!(details instanceof HTMLDetailsElement) || !details.classList.contains("diff") || !details.open) return;
+    if (details.dataset.loaded) return;
+    details.dataset.loaded = "1";
+    const body = details.querySelector(".diff-body")!;
+    const repo = decodeURIComponent(location.pathname.split("/")[2] ?? "");
+    const { run, stage, index } = details.dataset;
+    body.innerHTML = '<p class="muted">Loading…</p>';
+    try {
+      const diff = await getJson<DiffView>(
+        `/api/repos/${encodeURIComponent(repo)}/runs/${run}/diff?stage=${encodeURIComponent(stage ?? "")}`,
+      );
+      body.innerHTML = diffHtml(Number(index), diff);
+    } catch (err) {
+      delete details.dataset.loaded; // let the learner try again
+      body.innerHTML = `<p class="error">${esc(err instanceof Error ? err.message : String(err))}</p>`;
+    }
+  },
+  true,
+);
+
+async function historyPage(repo: string): Promise<void> {
+  const detail = await getJson<RepoDetail>(`/api/repos/${encodeURIComponent(repo)}`);
+  const stats = await getJson<StatsView>(`/api/repos/${encodeURIComponent(repo)}/stats`);
+  const names = new Map(detail.stages.map((s) => [s.index, s.name] as const));
+  app.innerHTML = `${navHtml(null)}
+    <main class="page history" style="--hue:${courseHue(detail.course.slug)}">
+      <section class="hero compact">
+        <p class="crumbs"><a href="/">My repos</a> / <a href="/courses/${esc(detail.course.slug)}">${esc(detail.course.name)}</a> / <a href="/r/${esc(
+          repo,
+        )}">${esc(repo)}</a> / History</p>
+        <h1>${esc(repo)} <span class="gradient-text">history</span></h1>
+      </section>
+      ${statsHtml(stats, Date.now())}
+      <h2 class="section-title">Runs</h2>
+      <div id="runs" class="run-list"></div>
+      <button type="button" id="more" class="ghost" hidden>Load more</button>
+    </main>${footerHtml()}`;
+  showToday();
+
+  const list = document.getElementById("runs")!;
+  const more = document.getElementById("more") as HTMLButtonElement;
+  let before: number | undefined;
+  const load = async () => {
+    more.disabled = true;
+    const page = await getJson<{ runs: RunListItemView[]; more: boolean }>(
+      `/api/repos/${encodeURIComponent(repo)}/runs${before === undefined ? "" : `?before=${before}`}`,
+    );
+    const now = Date.now();
+    list.insertAdjacentHTML("beforeend", page.runs.map((r) => runRowHtml(repo, r, now)).join(""));
+    if (page.runs.length === 0 && before === undefined) list.innerHTML = '<p class="muted">No runs yet: push to start one.</p>';
+    before = page.runs.at(-1)?.id;
+    more.hidden = !page.more;
+    more.disabled = false;
+  };
+  more.onclick = () => void load();
+  // A row's details load when it is first opened.
+  list.addEventListener(
+    "toggle",
+    async (e) => {
+      const row = e.target as HTMLDetailsElement;
+      if (!row.classList?.contains("run-row") || !row.open || row.dataset.loaded) return;
+      row.dataset.loaded = "1";
+      const target = row.querySelector(".run-detail")!;
+      try {
+        const run = await getJson<RunDetail>(`/api/repos/${encodeURIComponent(repo)}/runs/${row.dataset.run}`);
+        target.innerHTML = flyoutHtml(run, names);
+      } catch (err) {
+        delete row.dataset.loaded;
+        target.innerHTML = `<p class="error">${esc(err instanceof Error ? err.message : String(err))}</p>`;
+      }
+    },
+    true,
+  );
+  await load();
+}
+
 async function main(): Promise<void> {
   const [, area, repo, stage] = location.pathname.split("/");
   try {
-    if (area === "r" && repo) await stagePage(decodeURIComponent(repo), stage ? Number(stage) : null);
+    if (area === "r" && repo && stage === "runs") await historyPage(decodeURIComponent(repo));
+    else if (area === "r" && repo) await stagePage(decodeURIComponent(repo), stage ? Number(stage) : null);
     else if (area === "courses" && repo) await coursePage(decodeURIComponent(repo));
     else if (area === "courses") await coursesPage();
     else await homePage();

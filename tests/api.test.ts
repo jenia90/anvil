@@ -403,4 +403,60 @@ describe("repo detail clone command", () => {
     expect(JSON.parse(next.split("data: ")[1])).toEqual({ runId: run.id, line: "live" });
     await reader.cancel();
   });
+
+  test("runs list pages", async () => {
+    const { store, get } = await boot();
+    seed(store);
+    seed(store);
+    const page = await (await get("/api/repos/demo/runs?limit=1")).json();
+    expect(page.runs.map((r: any) => r.id)).toEqual([2]);
+    expect(page.more).toBe(true);
+    expect(page.runs[0].results).toEqual([{ stageIndex: 1, status: "passed" }, { stageIndex: 2, status: "failed" }]);
+    const rest = await (await get("/api/repos/demo/runs?before=2")).json();
+    expect(rest.runs.map((r: any) => r.id)).toEqual([1]);
+  });
+
+  test("runs list rejects a bad limit", async () => {
+    const { get } = await boot();
+    expect((await get("/api/repos/demo/runs?limit=0")).status).toBe(400);
+    expect((await get("/api/repos/demo/runs?limit=201")).status).toBe(400);
+    expect((await get("/api/repos/demo/runs?before=x")).status).toBe(400);
+  });
+
+  test("stats returns counts, times and stages", async () => {
+    const { store, get } = await boot();
+    const run = seed(store);
+    const stats = await (await get("/api/repos/demo/stats")).json();
+    expect(stats.runTimes).toEqual([run.createdAt]);
+    expect([stats.totalRuns, stats.finishedRuns, stats.passedRuns]).toEqual([1, 1, 0]);
+    expect(stats.stages.map((s: any) => [s.index, s.attempts])).toEqual([[1, 1], [2, 1]]);
+  });
+
+  test("activity spans repos", async () => {
+    const { store, get } = await boot();
+    const a = store.createRun("demo", "main", "a", []);
+    const b = store.createRun("elsewhere", "main", "b", []);
+    expect((await (await get("/api/activity")).json()).runTimes).toEqual([a.createdAt, b.createdAt]);
+  });
+
+  test("diff without an earlier pass has no base", async () => {
+    const { store, get } = await boot();
+    const run = seed(store);
+    const res = await get(`/api/repos/demo/runs/${run.id}/diff?stage=ia4`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ base: null });
+  });
+
+  test("diff 400 when the stage did not fail", async () => {
+    const { store, get } = await boot();
+    const run = seed(store);
+    expect((await get(`/api/repos/demo/runs/${run.id}/diff?stage=at4`)).status).toBe(400);
+    expect((await get(`/api/repos/demo/runs/${run.id}/diff`)).status).toBe(400);
+  });
+
+  test("diff 404 for another repo's run", async () => {
+    const { store, get } = await boot();
+    const other = store.createRun("elsewhere", "main", "x", []);
+    expect((await get(`/api/repos/demo/runs/${other.id}/diff?stage=ia4`)).status).toBe(404);
+  });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  type RunDetail, TEMPER_HUES, advanceOf, apiErrorMessage, faviconHref, followRun, keyAction, liveLineText, liveLogHtml,
+  type RunDetail, TEMPER_HUES, activityHtml, advanceOf, calendarHtml, dayKey, diffHtml, formatDuration, relativeTime, runRowHtml,
+  stageSummaryText, statsHtml, streak, apiErrorMessage, faviconHref, followRun, keyAction, liveLineText, liveLogHtml,
   notificationText, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
 } from "../web/render";
 import type { RunSummary } from "../src/api";
@@ -47,6 +48,12 @@ describe("flyoutHtml", () => {
     expect(html).toContain("Respond with 200");
     expect(html).toContain("Sent GET /");
     expect(html).not.toContain("Bind to a port");
+  });
+
+  test("offers the diff since the failed stage last passed", () => {
+    const html = flyoutHtml(failed, names);
+    expect(html).toContain('<details class="diff" data-run="1" data-stage="s2" data-index="2">');
+    expect(html).toContain("<summary>Changes since stage 2 last passed</summary>");
   });
 
   test("wraps the failing line in <mark>", () => {
@@ -383,5 +390,146 @@ describe("shortcutsHtml", () => {
   test("lists every shortcut", () => {
     const html = shortcutsHtml();
     for (const k of ["j", "k", "l", "r", "t", "?", "Esc"]) expect(html).toContain(`<kbd>${k}</kbd>`);
+  });
+});
+
+const at = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min).getTime();
+
+describe("dayKey", () => {
+  test("dayKey uses local dates", () => {
+    expect(dayKey(at(2026, 11, 20, 23, 59))).toBe("2026-11-20");
+    expect(dayKey(at(2026, 11, 21, 0, 1))).toBe("2026-11-21");
+  });
+});
+
+describe("streak", () => {
+  const now = at(2026, 11, 21, 9);
+  test("counts consecutive days ending today", () => {
+    expect(streak([at(2026, 11, 19), at(2026, 11, 20), at(2026, 11, 21, 8)], now)).toBe(3);
+  });
+  test("streak counts from yesterday when today is empty", () => {
+    expect(streak([at(2026, 11, 19), at(2026, 11, 20)], now)).toBe(2);
+  });
+  test("streak is 0 after a gap", () => {
+    expect(streak([at(2026, 11, 18)], now)).toBe(0);
+    expect(streak([], now)).toBe(0);
+  });
+});
+
+describe("calendarHtml", () => {
+  test("calendar spans 52 weeks, full width", () => {
+    const html = calendarHtml([], at(2026, 11, 21));
+    expect(html.match(/<i /g)!.length).toBe(52 * 7);
+    expect(html).toContain('style="--weeks:52"');
+  });
+
+  test("calendar labels Mon, Wed and Fri rows like GitHub", () => {
+    const html = calendarHtml([], at(2026, 11, 21));
+    expect(html).toContain('<div class="days" aria-hidden="true"><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span></span></div>');
+  });
+
+  test("calendar labels each month above the week it starts in", () => {
+    const html = calendarHtml([], at(2026, 11, 21)); // this week starts Mon 16 Nov: column 52
+    expect(html).toContain('<span style="grid-column:50">Nov</span>'); // the week of Mon 2 Nov
+    expect(html).toContain('<span style="grid-column:46">Oct</span>'); // the week of Mon 5 Oct
+    expect(html.match(/grid-column:/g)!.length).toBeLessThanOrEqual(13);
+  });
+
+  test("calendar has cells with levels", () => {
+    const now = at(2026, 11, 21); // a Saturday
+    const today = Array.from({ length: 4 }, () => at(2026, 11, 21, 8));
+    const html = calendarHtml([...today, at(2026, 11, 20)], now);
+    expect(html).toContain('title="2026-11-21: 4 runs" data-level="2"');
+    expect(html).toContain('title="2026-11-20: 1 run" data-level="1"');
+    expect(html).toContain('title="2026-11-19: 0 runs" data-level="0"');
+    expect(html).toContain('data-level="future"'); // Sunday 22nd, still to come this week
+  });
+});
+
+describe("formatDuration and relativeTime", () => {
+  test("formatDuration picks two units at most", () => {
+    expect([45_000, 12 * 60_000, 72 * 60_000, 60 * 60_000, (3 * 24 + 2) * 3_600_000].map(formatDuration)).toEqual([
+      "45s", "12m", "1h 12m", "1h", "3d 2h",
+    ]);
+  });
+  test("relativeTime", () => {
+    const now = at(2026, 11, 21, 12);
+    expect(relativeTime(now - 30_000, now)).toBe("just now");
+    expect(relativeTime(now - 5 * 60_000, now)).toBe("5m ago");
+    expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3h ago");
+    expect(relativeTime(now - 2 * 86_400_000, now)).toBe("2d ago");
+    expect(relativeTime(at(2026, 10, 1), now)).toBe(new Date(at(2026, 10, 1)).toLocaleDateString());
+  });
+});
+
+describe("stageSummaryText", () => {
+  test("ranges of passes then failures", () => {
+    const r = (stageIndex: number, status: "passed" | "failed") => ({ stageIndex, status });
+    expect(stageSummaryText([1, 2, 3, 4, 5].map((i) => r(i, "passed")).concat(r(6, "failed")))).toBe("✓ 1–5 ✗ 6");
+    expect(stageSummaryText([r(3, "passed")])).toBe("✓ 3");
+    expect(stageSummaryText([r(1, "failed")])).toBe("✗ 1");
+    expect(stageSummaryText([r(1, "passed"), r(2, "passed"), r(4, "passed")])).toBe("✓ 1–2, 4");
+    expect(stageSummaryText([])).toBe("");
+  });
+});
+
+describe("runRowHtml", () => {
+  const now = at(2026, 11, 21, 12);
+  const row = (over: Partial<Parameters<typeof runRowHtml>[1]>) =>
+    runRowHtml("demo", {
+      id: 7, repo: "demo", branch: "main", commitSha: "a1b2c3d4e5", status: "failed", stagesRequested: [],
+      createdAt: now - 120_000, finishedAt: now - 108_000, results: [{ stageIndex: 1, status: "failed" }], ...over,
+    }, now);
+  test("shows id, sha, branch, result, stages, duration and age", () => {
+    const html = row({});
+    for (const part of ['data-run="7"', "#7", "a1b2c3d", "main", "Failed", "✗ 1", "12s", "2m ago"]) expect(html).toContain(part);
+  });
+  test("runRowHtml shows running", () => {
+    const html = row({ status: "testing", finishedAt: null, results: [] });
+    expect(html).toContain("running");
+    expect(html).toContain("Testing");
+  });
+});
+
+describe("diffHtml", () => {
+  test("never passed / no changes / missing", () => {
+    expect(diffHtml(2, { base: null })).toContain("Stage 2 has never passed, so there is nothing to compare.");
+    expect(diffHtml(2, { base: "abc1234567", files: [], patch: "", truncated: false })).toContain(
+      "No changes since stage 2 last passed (<code>abc1234</code>).",
+    );
+    expect(diffHtml(2, { base: "abc", missing: true })).toContain("A commit in this comparison is no longer in anvil's copy of the repo.");
+  });
+  test("diffHtml escapes and colours", () => {
+    const html = diffHtml(2, {
+      base: "abc1234", truncated: true,
+      files: [{ path: "src/<x>.rs", added: 3, removed: 1 }, { path: "img.png", added: null, removed: null }],
+      patch: "--- a/x\n+++ b/x\n-old\n+new <b>\n context",
+    });
+    expect(html).toContain("src/&lt;x&gt;.rs");
+    expect(html).toContain("+3");
+    expect(html).toContain("binary");
+    expect(html).toContain('<span class="add">+new &lt;b&gt;</span>');
+    expect(html).toContain('<span class="del">-old</span>');
+    expect(html).not.toContain('<span class="add">+++');
+    expect(html).toContain("truncated");
+  });
+});
+
+describe("statsHtml and activityHtml", () => {
+  const now = at(2026, 11, 21, 12);
+  test("statsHtml shows tiles, calendar and the stage table", () => {
+    const html = statsHtml({
+      runTimes: [at(2026, 11, 20), at(2026, 11, 21, 9)], totalRuns: 4, finishedRuns: 4, passedRuns: 3,
+      stages: [{ index: 1, name: "Bind <port>", attempts: 2, firstPassAt: now, timeToPassMs: 72 * 60_000 },
+        { index: 2, name: "Respond", attempts: 1, firstPassAt: null, timeToPassMs: null }],
+    }, now);
+    for (const part of ["4", "75%", "2-day streak", "Bind &lt;port&gt;", "1h 12m", "—", 'class="calendar"']) expect(html).toContain(part);
+  });
+  test("pass rate is a dash with no finished runs", () => {
+    expect(statsHtml({ runTimes: [], totalRuns: 0, finishedRuns: 0, passedRuns: 0, stages: [] }, now)).toContain("—");
+  });
+  test("activityHtml is empty without runs", () => {
+    expect(activityHtml([], now)).toBe("");
+    expect(activityHtml([at(2026, 11, 21, 9)], now)).toContain("1-day streak");
   });
 });

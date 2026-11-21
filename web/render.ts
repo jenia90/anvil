@@ -201,7 +201,12 @@ export function flyoutHtml(run: RunDetail, stageNames: Map<number, string>): str
         .filter((r) => r.status === "failed")
         .map(
           (r) =>
-            `<section class="fail"><h3>Stage ${r.stageIndex}: ${ansiToHtml(stageNames.get(r.stageIndex) ?? r.stageSlug)}</h3>${logHtml(r.log, r.failureLine)}</section>`,
+            `<section class="fail"><h3>Stage ${r.stageIndex}: ${ansiToHtml(stageNames.get(r.stageIndex) ?? r.stageSlug)}</h3>${logHtml(
+              r.log,
+              r.failureLine,
+            )}<details class="diff" data-run="${run.id}" data-stage="${esc(r.stageSlug)}" data-index="${r.stageIndex}"><summary>Changes since stage ${
+              r.stageIndex
+            } last passed</summary><div class="diff-body"></div></details></section>`,
         )
         .join("");
   }
@@ -293,4 +298,182 @@ export function shortcutsHtml(): string {
   return `<div class="shortcuts" role="dialog" aria-label="Keyboard shortcuts"><h3>Keyboard shortcuts</h3><dl>${rows
     .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
     .join("")}</dl></div>`;
+}
+
+/** A run in the history list: its summary plus its passed and failed stages. */
+export type RunListItemView = RunSummary & { results: { stageIndex: number; status: "passed" | "failed" }[] };
+export type StatsView = {
+  runTimes: number[]; totalRuns: number; finishedRuns: number; passedRuns: number;
+  stages: { index: number; name: string; attempts: number; firstPassAt: number | null; timeToPassMs: number | null }[];
+};
+export type DiffView = {
+  base: string | null;
+  files?: { path: string; added: number | null; removed: number | null }[];
+  patch?: string;
+  truncated?: boolean;
+  missing?: true;
+};
+
+const pad = (n: number) => String(n).padStart(2, "0");
+/** The local calendar day of a time, as YYYY-MM-DD (the browser's time zone, wherever anvil runs). */
+export function dayKey(t: number): string {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+const addDays = (t: number, days: number) => {
+  const d = new Date(t);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 12).getTime(); // noon: safe across DST changes
+};
+
+/** Days in a row with a run, ending today, or yesterday when today has none yet. */
+export function streak(runTimes: number[], now: number): number {
+  const days = new Set(runTimes.map(dayKey));
+  let day = days.has(dayKey(now)) ? now : addDays(now, -1);
+  let n = 0;
+  while (days.has(dayKey(day))) {
+    n++;
+    day = addDays(day, -1);
+  }
+  return n;
+}
+
+const CALENDAR_WEEKS = 52;
+const level = (n: number) => (n === 0 ? 0 : n <= 2 ? 1 : n <= 5 ? 2 : 3);
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A GitHub-style heatmap of the last 52 weeks: one column per week (oldest left, newest right), Monday at the top,
+ * shaded by the number of runs that day; Mon/Wed/Fri labelled on the left and each month above the week it starts in.
+ */
+export function calendarHtml(runTimes: number[], now: number): string {
+  const counts = new Map<string, number>();
+  for (const t of runTimes) counts.set(dayKey(t), (counts.get(dayKey(t)) ?? 0) + 1);
+  const today = dayKey(now);
+  const monday = addDays(now, -((new Date(now).getDay() + 6) % 7));
+  const start = addDays(monday, -7 * (CALENDAR_WEEKS - 1));
+  const cells = Array.from({ length: CALENDAR_WEEKS * 7 }, (_, i) => {
+    const key = dayKey(addDays(start, i));
+    if (key > today) return `<i title="${key}" data-level="future"></i>`;
+    const n = counts.get(key) ?? 0;
+    return `<i title="${key}: ${n} run${n === 1 ? "" : "s"}" data-level="${level(n)}"></i>`;
+  });
+  const months: { column: number; name: string }[] = [];
+  for (let week = 0; week < CALENDAR_WEEKS; week++) {
+    const month = new Date(addDays(start, 7 * week)).getMonth();
+    if (months.at(-1)?.name !== MONTHS[month]) months.push({ column: week + 1, name: MONTHS[month] });
+  }
+  // The first week is usually mid-month: drop its label when the next month's would overlap it.
+  if (months.length > 1 && months[1].column - months[0].column < 3) months.shift();
+  const days = ["Mon", "", "Wed", "", "Fri", "", ""].map((d) => `<span>${d}</span>`).join("");
+  return `<div class="heatmap" style="--weeks:${CALENDAR_WEEKS}" role="img" aria-label="Runs per day, last ${CALENDAR_WEEKS} weeks"><div class="days" aria-hidden="true">${days}</div><div class="heatmap-scroll"><div class="months" aria-hidden="true">${months
+    .map((m) => `<span style="grid-column:${m.column}">${m.name}</span>`)
+    .join("")}</div><div class="calendar">${cells.join("")}</div></div></div>`;
+}
+
+export function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`;
+}
+
+export function relativeTime(t: number, now: number): string {
+  const s = Math.floor((now - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 7 * 86_400) return `${Math.floor(s / 86_400)}d ago`;
+  return new Date(t).toLocaleDateString();
+}
+
+/** `✓ 1–5 ✗ 6`: passed stages as ranges, then failed ones. */
+export function stageSummaryText(results: { stageIndex: number; status: "passed" | "failed" }[]): string {
+  const ranges = (xs: number[]) => {
+    const out: string[] = [];
+    for (const x of [...xs].sort((a, b) => a - b)) {
+      const last = out.at(-1);
+      const end = last ? Number(last.split("–").at(-1)) : Number.NaN;
+      if (last && x === end + 1) out[out.length - 1] = `${last.split("–")[0]}–${x}`;
+      else out.push(String(x));
+    }
+    return out.join(", ");
+  };
+  const passed = results.filter((r) => r.status === "passed").map((r) => r.stageIndex);
+  const failed = results.filter((r) => r.status === "failed").map((r) => r.stageIndex);
+  return [passed.length ? `✓ ${ranges(passed)}` : "", failed.length ? `✗ ${ranges(failed)}` : ""].filter(Boolean).join(" ");
+}
+
+export function runRowHtml(repo: string, run: RunListItemView, now: number): string {
+  const duration = run.finishedAt === null ? "running" : formatDuration(run.finishedAt - run.createdAt);
+  return `<details class="run-row ${run.status}" data-run="${run.id}" data-repo="${esc(repo)}"><summary><span class="run-id">#${run.id}</span><code>${esc(
+    run.commitSha.slice(0, 7),
+  )}</code><span class="chip">${esc(run.branch)}</span><span class="run-status">${LABELS[run.status]}</span><span class="stages">${esc(
+    stageSummaryText(run.results),
+  )}</span><span class="muted">${duration}</span><span class="muted when">${esc(relativeTime(run.createdAt, now))}</span></summary><div class="run-detail"></div></details>`;
+}
+
+const patchLine = (line: string) => {
+  const html = esc(line);
+  if (line.startsWith("+") && !line.startsWith("+++")) return `<span class="add">${html}</span>`;
+  if (line.startsWith("-") && !line.startsWith("---")) return `<span class="del">${html}</span>`;
+  return html;
+};
+
+export function diffHtml(stageIndex: number, diff: DiffView): string {
+  if (diff.base === null) return `<p class="muted">Stage ${stageIndex} has never passed, so there is nothing to compare.</p>`;
+  if (diff.missing) return `<p class="muted">A commit in this comparison is no longer in anvil's copy of the repo.</p>`;
+  if (!diff.files?.length) {
+    return `<p class="muted">No changes since stage ${stageIndex} last passed (<code>${esc(diff.base.slice(0, 7))}</code>).</p>`;
+  }
+  const files = diff.files
+    .map(
+      (f) =>
+        `<li><code>${esc(f.path)}</code> ${
+          f.added === null ? '<span class="muted">binary</span>' : `<span class="add">+${f.added}</span> <span class="del">−${f.removed}</span>`
+        }</li>`,
+    )
+    .join("");
+  const note = diff.truncated ? '<p class="note">The patch is long; it was truncated.</p>' : "";
+  return `<p class="muted">Compared with <code>${esc(diff.base.slice(0, 7))}</code>, where stage ${stageIndex} last passed.</p><ul class="diff-files">${files}</ul>${note}<pre class="log diff-patch">${(
+    diff.patch ?? ""
+  )
+    .split("\n")
+    .map(patchLine)
+    .join("\n")}</pre>`;
+}
+
+const tile = (value: string, label: string) => `<div class="tile"><strong>${value}</strong><span class="muted">${label}</span></div>`;
+
+export function statsHtml(stats: StatsView, now: number): string {
+  const rate = stats.finishedRuns ? `${Math.round((stats.passedRuns / stats.finishedRuns) * 100)}%` : "—";
+  const days = streak(stats.runTimes, now);
+  const rows = stats.stages
+    .map(
+      (s) =>
+        `<tr><td class="n">${s.index}</td><td>${esc(s.name)}</td><td class="n">${s.attempts}</td><td class="n">${
+          s.timeToPassMs === null ? "—" : formatDuration(s.timeToPassMs)
+        }</td></tr>`,
+    )
+    .join("");
+  const table = rows
+    ? `<table class="stage-stats"><thead><tr><th>#</th><th>Stage</th><th>Attempts</th><th>Time to pass</th></tr></thead><tbody>${rows}</tbody></table>`
+    : "";
+  return `<section class="stats"><div class="tiles">${tile(String(stats.totalRuns), "runs")}${tile(rate, "passed")}${tile(
+    `🔥 ${days}`,
+    `${days}-day streak`,
+  )}</div>${calendarHtml(stats.runTimes, now)}${table}</section>`;
+}
+
+/** The home page's activity strip across all repos; empty before the first run. */
+export function activityHtml(runTimes: number[], now: number): string {
+  if (runTimes.length === 0) return "";
+  const days = streak(runTimes, now);
+  return `<section class="activity"><div class="activity-head"><h2 class="section-title">Activity</h2><span class="streak">🔥 ${days}-day streak</span></div>${calendarHtml(
+    runTimes,
+    now,
+  )}</section>`;
 }

@@ -1,7 +1,8 @@
 import type { Catalog } from "./catalog";
 import { type Config, appUrl } from "./config";
 import type { LogEvent, RunEvents } from "./events";
-import { hasCommits, mainHead, remoteUrl } from "./git-remote";
+import { diffCommits, hasCommits, mainHead, remoteUrl } from "./git-remote";
+import { stageStats } from "./stats";
 import { renderStageMd } from "./course";
 import { currentStageIndex, stageViews } from "./progress";
 import { RunRequestError, UnknownRepoError } from "./pushes";
@@ -24,6 +25,9 @@ export const toSummary = ({ buildLog: _b, testerLog: _t, ...rest }: RunRecord): 
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const notFound = (what: string) => json({ error: `unknown ${what}` }, 404);
+
+/** Largest patch the diff endpoint returns (bytes); bigger ones are cut and flagged. */
+const DIFF_CAP = 200 * 1024;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -120,7 +124,53 @@ export function apiRoutes({ config, store, events, port, catalog, startCourse, s
       });
     },
 
+    "/api/activity": () => json({ runTimes: store.runTimes() }),
+
+    "/api/repos/:repo/stats": (req: Request & { params: { repo: string } }) => {
+      const found = lookup(req.params.repo);
+      if (!found) return notFound("repo");
+      const counts = store.runCounts(found.repo.name);
+      return json({
+        runTimes: store.runTimes(found.repo.name),
+        totalRuns: counts.total, finishedRuns: counts.finished, passedRuns: counts.passed,
+        stages: stageStats(found.course, store.mainRuns(found.repo.name)),
+      });
+    },
+
+    "/api/repos/:repo/runs/:id/diff": (req: Request & { params: { repo: string; id: string } }) => {
+      const found = lookup(req.params.repo);
+      if (!found) return notFound("repo");
+      const run = store.getRun(Number(req.params.id));
+      if (!run || run.repo !== found.repo.name) return notFound("run");
+      const slug = new URL(req.url).searchParams.get("stage");
+      if (!slug || !run.stageResults.some((r) => r.stageSlug === slug && r.status === "failed")) {
+        return json({ error: "expected ?stage=<slug> of a stage that failed in this run" }, 400);
+      }
+      const base = store.lastPassingCommit(found.repo.name, slug, run.id);
+      if (base === null) return json({ base: null });
+      if (base === run.commitSha) return json({ base, files: [], patch: "", truncated: false });
+      return json({ base, ...diffCommits(config.dataDir, found.repo.name, base, run.commitSha, DIFF_CAP) });
+    },
+
     "/api/repos/:repo/runs": {
+      GET: (req: Request & { params: { repo: string } }) => {
+        const found = lookup(req.params.repo);
+        if (!found) return notFound("repo");
+        const params = new URL(req.url).searchParams;
+        const limit = Number(params.get("limit") ?? 50);
+        const before = params.has("before") ? Number(params.get("before")) : undefined;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200 || (before !== undefined && !Number.isInteger(before))) {
+          return json({ error: "expected limit 1–200 and an integer before" }, 400);
+        }
+        const indexBySlug = new Map(found.course.stages.map((s) => [s.slug, s.index]));
+        const page = store.listRuns(found.repo.name, { before, limit });
+        return json({
+          runs: page.runs.map(({ results, ...run }) => ({
+            ...run, results: results.map((r) => ({ stageIndex: indexBySlug.get(r.stageSlug) ?? 0, status: r.status })),
+          })),
+          more: page.more,
+        });
+      },
       POST: async (req: Request & { params: { repo: string } }) => {
         if (!lookup(req.params.repo)) return notFound("repo");
         // JSON only, like POST /api/repos: a cross-site form cannot send it without a preflight this server refuses.
