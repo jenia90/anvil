@@ -37,7 +37,7 @@ bun run start                          # or: bun run src/main.ts path/to/config.
 ```
 
 `anvil.yml` is gitignored, so your local paths stay out of the repo. See `anvil.example.yml` for every setting
-(`port`, `dataDir`, `repos`, `courses`).
+(`port`, `dataDir`, `url`, `repos`, `courses`, `hint`).
 
 Each repo names a course slug (the `<slug>` in `build-your-own-<slug>`) and the language you are using:
 
@@ -191,14 +191,18 @@ style. With an API key you can skip them: `command: claude -p --bare`.
 
 ## What happens on a push
 
-1. Each updated branch gets a run (tags and branch deletions are ignored; a push is always accepted).
+1. Each updated branch gets a run (tags and branch deletions are ignored; a push is always accepted). Only runs on
+   `main` move your progress; a push to another branch is tested and says so.
 2. The commit is checked out and prepared as CodeCrafters does: `.codecrafters/compile.sh` runs if present, and
    `.codecrafters/run.sh` (if present) replaces `your_program.sh`. Then the course tester runs, with `TESTER_DIR`
    set to the tester's folder.
 3. The first push of a repo runs every stage; later pushes run stages 1 up to the current stage.
-4. Output streams back as `remote:` lines and live into the strip at the bottom of the stage page.
-   Click the strip to open the failure details.
-5. The current stage is the first stage whose latest result is not a pass.
+   `git push -o stage=N` runs only stage N (it must be unlocked; otherwise nothing runs and the push output says
+   why). Its result counts like any other.
+4. Output streams back as `remote:` lines and live into the stage page (the strip at the bottom shows the newest
+   line; its details show the whole log as it is written).
+5. The current stage is the first stage whose latest result on `main` is not a pass. Stages after it stay locked
+   (name only, no instructions) until you reach them; a stage you reached once stays unlocked.
 
 Runs for one course are queued one at a time (the tester and build output use fixed ports and paths).
 
@@ -207,12 +211,23 @@ Runs for one course are queued one at a time (the tester and build output use fi
 - `/` lists your repos with their course and current stage, and links to the course catalog.
 - `/courses` lists the courses; `/courses/<slug>` shows a course's description and stages, the repos you already
   started for it, and the language picker with **Start**.
+- `/` also shows your activity across all repos: a GitHub-style heatmap of the last year and your day streak.
 - `/r/<repo>` opens the current stage; `/r/<repo>/<n>` opens stage `n`.
-- A stage page has the stage list on the left (done, current, upcoming; extension stages grouped under their
-  extension's name), the instructions for your repo's language in the middle, and a strip along the bottom with the latest push: short commit hash, branch and state.
-  The strip updates live while a run is queued, building or testing.
-- Click the strip to open a flyout with the details: for a failed run, each failed stage's tester log with the failing
-  line highlighted; for a build failure, the compile output; for a pass, a link to the next stage.
+- A stage page has the stage list on the left (done, current, upcoming, locked; extension stages grouped under their
+  extension's name), the instructions for your repo's language in the middle, and a strip along the bottom with the
+  latest run: short commit hash, branch and state, and while it runs, the newest output line. The strip has a
+  **Re-run** button (tests the head of `main` again, no commit needed) and the stage header a **Test this stage**
+  button (only that stage).
+- Click the strip to open a flyout with the details: while a run is going, its output as it is written; for a failed
+  run, each failed stage's tester log with the failing line highlighted, the changes since that stage last passed,
+  and a **💡 Hint** button (see Hints); for a build failure, the compile output; for a pass, a link to the next stage.
+- The tab title and icon show the latest run's state (⏳ ✓ ✗). Press 🔔 in the strip to get a browser notification
+  when a run finishes while the tab is in the background. Passing your current stage sets off a burst of sparks.
+- Keyboard shortcuts on a stage page: `j`/`k` (or →/←) next and previous stage, `l` run details, `r` re-run,
+  `t` test this stage, `?` the list, `Esc` close.
+- `/r/<repo>/runs` (the **History** link) lists every run, newest first, with its stages, duration and details on
+  click, under the repo's stats: runs, pass rate, day streak, a heatmap, and per stage the attempts and the time it
+  took to pass.
 - Until a repo has had its first push, the page shows what to run: `git clone` for a course started from anvil,
   or `git remote add` for an existing repo you registered by hand.
 
@@ -224,7 +239,7 @@ Runs for one course are queued one at a time (the tester and build output use fi
 - Stored logs are capped at about 1 MiB per phase; the tester's own result lines are always kept.
 - Extensions are not optional: their stages follow the base stages in the order the course definition lists them,
   and the current stage is the first one not passing. Every push re-runs all stages up to the current one, as on
-  CodeCrafters.
+  CodeCrafters (unless you ask for a single stage with `-o stage=N`, **Test this stage** or `--stage N`).
 - Some courses need more from your machine. The `claude-code` tester calls OpenRouter with your own key: export
   `CODECRAFTERS_SECRET_OPENROUTER_API_KEY` before `bun run start` (usage is billed to that key). The `docker` course
   needs root and Linux namespaces.
