@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findAnvil, packWorkingTree, parseAnvilRemote, parseTestArgs, runTest } from "../src/cli";
+import { findAnvil, packWorkingTree, parseAnvilRemote, parseSubmitArgs, parseTestArgs, runSubmit, runTest } from "../src/cli";
 import { type Config, loadConfig } from "../src/config";
 import { RunEvents } from "../src/events";
 import { ensureBareRepo, remoteUrl } from "../src/git-remote";
@@ -50,7 +50,7 @@ describe("findAnvil", () => {
   test("picks the only anvil remote, from a subfolder too", () => {
     const dir = repoWithRemotes({ origin: "http://127.0.0.1:4300/git/demo.git", github: "git@github.com:me/x.git" });
     mkdirSync(join(dir, "src"));
-    expect(findAnvil(join(dir, "src"))).toEqual({ base: "http://127.0.0.1:4300", repo: "demo", root: dir });
+    expect(findAnvil(join(dir, "src"))).toEqual({ base: "http://127.0.0.1:4300", repo: "demo", root: dir, remote: "origin" });
   });
   test("explains when there is none, or several without --remote", () => {
     expect(() => findAnvil(repoWithRemotes({ github: "git@github.com:me/x.git" }))).toThrow(/no anvil remote/);
@@ -157,5 +157,162 @@ describe("runTest", () => {
     const out: string[] = [];
     expect(await runTest({ cwd: workDir, out: (s) => out.push(s) })).toBe(2);
     expect(out.join("")).toContain("could not reach anvil");
+  });
+});
+
+describe("parseSubmitArgs", () => {
+  test("reads -m/--message, --stage and --remote", () => {
+    expect(parseSubmitArgs([])).toEqual({});
+    expect(parseSubmitArgs(["-m", "fix parser", "--stage", "2", "--remote", "local"])).toEqual({
+      message: "fix parser", stage: 2, remote: "local",
+    });
+    expect(parseSubmitArgs(["--message", "x"])).toEqual({ message: "x" });
+    expect(() => parseSubmitArgs(["-m"])).toThrow();
+    expect(() => parseSubmitArgs(["--nope"])).toThrow();
+  });
+});
+
+describe("runSubmit", () => {
+  async function solution() {
+    const env = await anvil();
+    const { workDir } = await makeFixtureRepo();
+    git(workDir, "remote", "add", "origin", env.url);
+    git(workDir, "config", "user.name", "Learner"); // anvil submit commits as the user; tests bring their own identity
+    git(workDir, "config", "user.email", "learner@example.com");
+    const out: string[] = [];
+    const submit = (opts: { stage?: number; message?: string } = {}) =>
+      runSubmit({ cwd: workDir, out: (s) => out.push(s), ...opts });
+    return { ...env, workDir, out, submit };
+  }
+
+  test("submit commits changes and pushes them to main", async () => {
+    const { store, workDir, out, submit } = await solution();
+    writeFileSync(join(workDir, "new.txt"), "work");
+    expect(await submit()).toBe(0);
+    expect(git(workDir, "log", "-1", "--format=%s")).toBe("anvil submit");
+    expect(git(workDir, "status", "--porcelain")).toBe("");
+    const run = store.latestRun("demo")!;
+    expect([run.branch, run.commitSha]).toEqual(["main", git(workDir, "rev-parse", "HEAD")]);
+    expect(store.latestStageResults("demo").get("at4")).toBe("passed");
+    expect(out.join("")).toContain("Stage 1: Bind to a port");
+  });
+
+  test("submit uses the given message", async () => {
+    const { workDir, submit } = await solution();
+    writeFileSync(join(workDir, "new.txt"), "work");
+    await submit({ message: "fix the parser" });
+    expect(git(workDir, "log", "-1", "--format=%s")).toBe("fix the parser");
+  });
+
+  test("a failing submission exits 1", async () => {
+    const { workDir, submit } = await solution();
+    writeFileSync(join(workDir, "fail-at"), "1");
+    expect(await submit()).toBe(1);
+  });
+
+  test("a clean tree pushes the current commit without a new one", async () => {
+    const { workDir, submit } = await solution();
+    const head = git(workDir, "rev-parse", "HEAD");
+    expect(await submit()).toBe(0);
+    expect(git(workDir, "rev-parse", "HEAD")).toBe(head);
+  });
+
+  test("nothing new to submit reports the last result", async () => {
+    const { out, submit } = await solution();
+    expect(await submit()).toBe(0);
+    expect(await submit()).toBe(0);
+    expect(out.join("")).toContain("Nothing new to submit");
+  });
+
+  test("--stage runs only that stage", async () => {
+    const { store, workDir, submit } = await solution();
+    writeFileSync(join(workDir, "fail-at"), "2");
+    expect(await submit()).toBe(1); // current stage 2
+    rmSync(join(workDir, "fail-at"));
+    expect(await submit({ stage: 2 })).toBe(0);
+    expect(store.latestRun("demo")!.stagesRequested).toEqual(["ia4"]);
+  });
+
+  test("a locked stage is refused before anything is committed or pushed", async () => {
+    const { store, workDir, out, submit } = await solution();
+    const head = git(workDir, "rev-parse", "HEAD");
+    writeFileSync(join(workDir, "new.txt"), "work");
+    expect(await submit({ stage: 3 })).toBe(2);
+    expect(out.join("")).toContain("stage 3 is locked; pass stage 1 first");
+    expect(git(workDir, "rev-parse", "HEAD")).toBe(head);
+    expect(store.latestRun("demo")).toBeNull();
+  });
+
+  test("nothing new with --stage runs that stage on the current commit", async () => {
+    const { store, submit } = await solution();
+    expect(await submit()).toBe(0); // every stage passes
+    expect(await submit({ stage: 2 })).toBe(0);
+    const run = store.latestRun("demo")!;
+    expect(run.stagesRequested).toEqual(["ia4"]);
+    expect(run.status).toBe("passed");
+  });
+
+  test("a merge in progress is refused", async () => {
+    const { workDir, out, submit } = await solution();
+    writeFileSync(join(workDir, "f.txt"), "base\n");
+    git(workDir, "add", "-A");
+    git(workDir, "commit", "-q", "-m", "base");
+    git(workDir, "checkout", "-q", "-b", "side");
+    writeFileSync(join(workDir, "f.txt"), "side\n");
+    git(workDir, "commit", "-qam", "side");
+    git(workDir, "checkout", "-q", "main");
+    writeFileSync(join(workDir, "f.txt"), "main\n");
+    git(workDir, "commit", "-qam", "main");
+    Bun.spawnSync(["git", "merge", "side"], { cwd: workDir }); // conflicts
+    const head = git(workDir, "rev-parse", "HEAD");
+    expect(await submit()).toBe(2);
+    expect(out.join("")).toContain("a merge is in progress");
+    expect(git(workDir, "rev-parse", "HEAD")).toBe(head);
+  });
+
+  test("a push that fails for another reason gets no pull hint", async () => {
+    const { workDir, out, submit } = await solution();
+    writeFileSync(join(workDir, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    writeFileSync(join(workDir, "new.txt"), "work");
+    expect(await submit()).toBe(2);
+    expect(out.join("")).toContain("git push failed");
+    expect(out.join("")).not.toContain("pull --rebase");
+  });
+
+  test("submit says when anvil is not running", async () => {
+    const { workDir } = await makeFixtureRepo();
+    git(workDir, "remote", "add", "origin", "http://127.0.0.1:1/git/demo.git");
+    const out: string[] = [];
+    expect(await runSubmit({ cwd: workDir, out: (s) => out.push(s) })).toBe(2);
+    expect(out.join("")).toContain("could not reach anvil at http://127.0.0.1:1");
+  });
+
+  test("an unknown repo shows anvil's error", async () => {
+    const { url } = await anvil();
+    const { workDir } = await makeFixtureRepo();
+    git(workDir, "remote", "add", "origin", url.replace("/demo.git", "/nope.git"));
+    const out: string[] = [];
+    expect(await runSubmit({ cwd: workDir, out: (s) => out.push(s) })).toBe(2);
+    expect(out.join("")).toContain("unknown repo");
+  });
+
+  test("a rejected push exits 2", async () => {
+    const { url, workDir, submit } = await solution();
+    expect(await submit()).toBe(0);
+    // Async git: a blocking call would stall the anvil server running in this same process.
+    const gitAsync = async (cwd: string, ...args: string[]) => {
+      const p = Bun.spawn(["git", "-c", "user.name=o", "-c", "user.email=o@o", ...args], { cwd, stdout: "ignore", stderr: "ignore" });
+      expect(await p.exited).toBe(0);
+    };
+    const other = mkdtempSync(join(tmpdir(), "other-"));
+    await gitAsync(other, "clone", "-q", url, "c");
+    writeFileSync(join(other, "c", "elsewhere.txt"), "x");
+    await gitAsync(join(other, "c"), "add", "-A");
+    await gitAsync(join(other, "c"), "commit", "-q", "-m", "from another clone");
+    await gitAsync(join(other, "c"), "push", "-q", "origin", "HEAD:main");
+    writeFileSync(join(workDir, "mine.txt"), "y");
+    const out2: string[] = [];
+    expect(await runSubmit({ cwd: workDir, out: (s) => out2.push(s) })).toBe(2);
+    expect(out2.join("")).toContain("git pull --rebase");
   });
 });
