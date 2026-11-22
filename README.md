@@ -221,7 +221,8 @@ Runs for one course are queued one at a time (the tester and build output use fi
 - Click the strip to open a flyout with the details: while a run is going, its output as it is written; for a failed
   run, each failed stage's tester log with the failing line highlighted, the changes since that stage last passed,
   and a **💡 Hint** button (see Hints); for a build failure, the compile output; for a pass, a link to the next stage.
-- The tab title and icon show the latest run's state (⏳ ✓ ✗). Press 🔔 in the strip to get a browser notification
+- The tab title names the open course and stage (`Build your own Redis · Stage 3: Bind to a port · anvil`; the course
+  page and history show the course), and with the icon it shows the latest run's state (⏳ ✓ ✗). Press 🔔 in the strip to get a browser notification
   when a run finishes while the tab is in the background. Passing your current stage sets off a burst of sparks.
 - Keyboard shortcuts on a stage page: `j`/`k` (or →/←) next and previous stage, `l` run details, `r` re-run,
   `t` test this stage, `?` the list, `Esc` close.
