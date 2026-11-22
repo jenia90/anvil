@@ -6,7 +6,7 @@ import type { Catalog, CatalogCourse } from "../src/catalog";
 import {
   type DiffView, type RepoListItem, type RunDetail, type RunListItemView, type StatsView, activityHtml, advanceOf, diffHtml,
   hintButtonLabel, hintHtml, runRowHtml, splitHintOutput, statsHtml, apiErrorMessage, courseHue, coursesHtml, esc, faviconHref, flyoutHtml,
-  followRun, footerHtml, keyAction, liveLineText, liveLogHtml, lockedHtml, navHtml, notificationText, progressHtml,
+  followRun, footerHtml, keyAction, liveLineText, liveLogHtml, lockedHtml, navHtml, notificationText, pageTitle, progressHtml,
   repoCardsHtml, setupHtml, shortcutsHtml, sparksHtml, stripText, titlePrefix, toastHtml,
 } from "./render";
 
@@ -172,6 +172,7 @@ async function coursesPage(): Promise<void> {
 
 async function coursePage(slug: string): Promise<void> {
   const course = await getJson<CatalogCourse & { repos: string[] }>(`/api/courses/${encodeURIComponent(slug)}`);
+  document.title = pageTitle(course.name);
   let lastExtension: string | null = null;
   const stages = course.stages
     .map((s, i) => {
@@ -287,7 +288,7 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
   const body = document.getElementById("stage-body")!;
   const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
   const pageIcon = favicon?.href ?? "";
-  const pageTitle = document.title;
+  const baseTitle = pageTitle(detail.course.name, `Stage ${stage.index}: ${stage.name}`);
   let latest = detail.latestRun;
   let lines: string[] = [];
   let requesting = false; // a run request is in flight: buttons and shortcuts wait for its run to show up
@@ -342,7 +343,7 @@ async function stagePage(repo: string, requested: number | null): Promise<void> 
     testButton.hidden = !detail.canRun || (detail.stages.find((s) => s.index === stage.index)?.locked ?? true);
     testButton.disabled = running() || requesting;
     notifyButton.hidden = !("Notification" in window) || Notification.permission !== "default";
-    document.title = `${titlePrefix(latest)}${pageTitle}`;
+    document.title = `${titlePrefix(latest)}${baseTitle}`;
     const icon = faviconHref(latest);
     if (favicon) favicon.href = icon ?? pageIcon;
   };
@@ -541,6 +542,7 @@ async function historyPage(repo: string): Promise<void> {
   const detail = await getJson<RepoDetail>(`/api/repos/${encodeURIComponent(repo)}`);
   const stats = await getJson<StatsView>(`/api/repos/${encodeURIComponent(repo)}/stats`);
   const names = new Map(detail.stages.map((s) => [s.index, s.name] as const));
+  document.title = pageTitle("History", detail.course.name);
   app.innerHTML = `${navHtml(null)}
     <main class="page history" style="--hue:${courseHue(detail.course.slug)}">
       <section class="hero compact">

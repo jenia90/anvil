@@ -226,6 +226,11 @@ export function followRun(current: RunSummary | null, incoming: RunSummary): Run
   return current === null || incoming.id >= current.id ? incoming : current;
 }
 
+/** The tab title: what is open, most specific last before the brand, e.g. `Build your own Redis · Stage 3: Bind to a port · anvil`. */
+export function pageTitle(...parts: (string | null | undefined)[]): string {
+  return [...parts.filter((p): p is string => Boolean(p)), "anvil"].join(" · ");
+}
+
 export function titlePrefix(run: RunSummary | null): string {
   if (!run) return "";
   if (!FINISHED.has(run.status)) return "⏳ ";

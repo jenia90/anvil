@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type RunDetail, TEMPER_HUES, activityHtml, advanceOf, calendarHtml, dayKey, diffHtml, formatDuration, relativeTime, runRowHtml,
   stageSummaryText, statsHtml, streak, apiErrorMessage, faviconHref, followRun, keyAction, liveLineText, liveLogHtml,
-  hintButtonLabel, hintHtml, notificationText, splitHintOutput, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
+  hintButtonLabel, hintHtml, notificationText, pageTitle, splitHintOutput, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
 } from "../web/render";
 import type { RunSummary } from "../src/api";
 import type { RunStatus } from "../src/store";
@@ -292,6 +292,18 @@ describe("followRun", () => {
     expect(followRun(summary(3, "queued"), summary(2, "testing"))!.id).toBe(3);
     expect(followRun(summary(3, "queued"), summary(3, "testing"))!.status).toBe("testing");
     expect(followRun(summary(3, "passed"), summary(4, "queued"))!.id).toBe(4);
+  });
+});
+
+describe("pageTitle", () => {
+  test("lists what is open, then the brand", () => {
+    expect(pageTitle()).toBe("anvil");
+    expect(pageTitle("Build your own Redis")).toBe("Build your own Redis · anvil");
+    expect(pageTitle("Build your own Redis", "Stage 3: Bind to a port")).toBe("Build your own Redis · Stage 3: Bind to a port · anvil");
+  });
+
+  test("skips missing parts", () => {
+    expect(pageTitle(null, undefined, "", "History")).toBe("History · anvil");
   });
 });
 
