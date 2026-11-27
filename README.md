@@ -8,6 +8,32 @@ Any course published in the [codecrafters-io](https://github.com/codecrafters-io
 git, sqlite, interpreter, http-server, claude-code, ...): name its slug in the config and anvil downloads the
 course and its tester.
 
+![A push fixes the ECHO stage of the Redis course: the run's output streams into the stage page, every stage passes and the next one unlocks](docs/media/push-demo.webp)
+
+*`git push` on a Redis solution in Python: the output streams live into the stage page, stage 5 passes and stage 6
+unlocks. The same output comes back in the terminal:*
+
+```console
+$ git push origin main
+remote: Testing 8afdaca on main: 5 stage(s)
+remote: [stage-1] Running tests for Stage #1: Bind to a port
+...
+remote: [stage-5] Running tests for Stage #5: Implement the ECHO command
+remote: [stage-5] $ ./your_program.sh
+remote: [stage-5] [client] $ redis-cli ECHO orange
+remote: [stage-5] [client] ✔︎ Received "orange"
+remote: [stage-5] Test passed.
+remote: ✔ Stage 1: Bind to a port
+remote: ✔ Stage 2: Respond to PING
+remote: ✔ Stage 3: Respond to multiple PINGs
+remote: ✔ Stage 4: Handle concurrent clients
+remote: ✔ Stage 5: Implement the ECHO command
+remote: Current stage is now 6: Implement the SET & GET commands
+remote: View: http://127.0.0.1:4300/r/redis-python/6
+To http://127.0.0.1:4300/git/redis-python.git
+   739b13d..8afdaca  main -> main
+```
+
 > **Unofficial.** anvil is an independent project, not affiliated with or endorsed by
 > [CodeCrafters](https://codecrafters.io). It contains no CodeCrafters material: course definitions, instructions and
 > starter code are downloaded from CodeCrafters' public GitHub repositories (MIT-licensed), and testers from the
@@ -207,6 +233,10 @@ style. With an API key you can skip them: `command: claude -p --bare`.
 Runs for one course are queued one at a time (the tester and build output use fixed ports and paths).
 
 ## The web pages
+
+| Your repos and activity | A failed stage's details | A repo's history |
+| --- | --- | --- |
+| [![The home page: activity heatmap, day streak and a redis-python repo at stage 5](docs/media/home.webp)](docs/media/home.webp) | [![A stage page with the run details open: the failing tester log with the error line highlighted, and the Hint button](docs/media/stage-failed.webp)](docs/media/stage-failed.webp) | [![The history page: runs, pass rate, streak, heatmap and per-stage attempts and time to pass](docs/media/history.webp)](docs/media/history.webp) |
 
 - `/` lists your repos with their course and current stage, and links to the course catalog.
 - `/courses` lists the courses; `/courses/<slug>` shows a course's description and stages, the repos you already
