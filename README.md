@@ -20,8 +20,8 @@ remote: [stage-1] Running tests for Stage #1: Bind to a port
 ...
 remote: [stage-5] Running tests for Stage #5: Implement the ECHO command
 remote: [stage-5] $ ./your_program.sh
-remote: [stage-5] [client] $ redis-cli ECHO orange
-remote: [stage-5] [client] ✔︎ Received "orange"
+remote: [stage-5] [client] $ redis-cli ECHO raspberry
+remote: [stage-5] [client] ✔︎ Received "raspberry"
 remote: [stage-5] Test passed.
 remote: ✔ Stage 1: Bind to a port
 remote: ✔ Stage 2: Respond to PING
@@ -234,12 +234,15 @@ Runs for one course are queued one at a time (the tester and build output use fi
 
 ## The web pages
 
-| Your repos and activity | A failed stage's details | A repo's history |
-| --- | --- | --- |
-| [![The home page: activity heatmap, day streak and a redis-python repo at stage 5](docs/media/home.webp)](docs/media/home.webp) | [![A stage page with the run details open: the failing tester log with the error line highlighted, and the Hint button](docs/media/stage-failed.webp)](docs/media/stage-failed.webp) | [![The history page: runs, pass rate, streak, heatmap and per-stage attempts and time to pass](docs/media/history.webp)](docs/media/history.webp) |
+| Your repos and activity | The course catalog |
+| --- | --- |
+| [![The home page: activity heatmap, day streak and a redis-python repo at stage 5](docs/media/home.webp)](docs/media/home.webp) | [![The course catalog: a card per CodeCrafters course with its icon, description, difficulty and stage count](docs/media/courses.webp)](docs/media/courses.webp) |
+| **A failed stage's details** | **A repo's history** |
+| [![A stage page with the run details open: the failing tester log with the error line highlighted, and the Hint button](docs/media/stage-failed.webp)](docs/media/stage-failed.webp) | [![The history page: runs, pass rate, streak, heatmap and per-stage attempts and time to pass](docs/media/history.webp)](docs/media/history.webp) |
 
 - `/` lists your repos with their course and current stage, and links to the course catalog.
-- `/courses` lists the courses; `/courses/<slug>` shows a course's description and stages, the repos you already
+- `/courses` lists the courses, each with its icon (the product's logo, such as Redis or Kafka, or a generic icon
+  for what the course builds, such as a terminal for the shell course); `/courses/<slug>` shows a course's description and stages, the repos you already
   started for it, and the language picker with **Start**.
 - `/` also shows your activity across all repos: a GitHub-style heatmap of the last year and your day streak.
 - `/r/<repo>` opens the current stage; `/r/<repo>/<n>` opens stage `n`.
@@ -300,3 +303,7 @@ bun test
 ## License
 
 anvil's own code is MIT-licensed (see `LICENSE`). That licence does not cover anything anvil downloads.
+
+The course icons (`web/course-icons.ts`) are from [Simple Icons](https://simpleicons.org) (CC0) and
+[Lucide](https://lucide.dev) (ISC; notices in that file). The product logos among them are trademarks of their owners,
+shown only to name the product each course rebuilds.

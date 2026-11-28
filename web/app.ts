@@ -4,7 +4,7 @@ import type { RunSummary } from "../src/api";
 import { FINISHED } from "../src/events";
 import type { Catalog, CatalogCourse } from "../src/catalog";
 import {
-  type DiffView, type RepoListItem, type RunDetail, type RunListItemView, type StatsView, activityHtml, advanceOf, diffHtml,
+  courseMarkHtml, type DiffView, type RepoListItem, type RunDetail, type RunListItemView, type StatsView, activityHtml, advanceOf, diffHtml,
   hintButtonLabel, hintHtml, runRowHtml, splitHintOutput, statsHtml, apiErrorMessage, courseHue, coursesHtml, esc, faviconHref, flyoutHtml,
   followRun, footerHtml, keyAction, liveLineText, liveLogHtml, lockedHtml, navHtml, notificationText, pageTitle, progressHtml,
   repoCardsHtml, setupHtml, shortcutsHtml, sparksHtml, stripText, titlePrefix, toastHtml,
@@ -28,8 +28,7 @@ const getJson = async <T>(url: string): Promise<T> => {
 };
 const md = (text: string) => marked.parse(text, { async: false });
 const difficultyLabel = (d: string) => d.replace(/_/g, " ");
-const mark = (slug: string, extra = "") =>
-  `<span class="course-mark${extra}" aria-hidden="true">${esc(slug.charAt(0).toUpperCase())}</span>`;
+const mark = courseMarkHtml;
 
 // Sparks from the forge, behind every page; outside #app so page changes do not restart them.
 document.body.insertAdjacentHTML("afterbegin", sparksHtml(28));

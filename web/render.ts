@@ -4,6 +4,7 @@ import type { RunSummary } from "../src/api";
 import type { Catalog } from "../src/catalog";
 import type { RunRecord, RunStatus, StageResultRecord } from "../src/store";
 import { FINISHED } from "../src/events";
+import { COURSE_ICONS } from "./course-icons";
 
 export type RunDetail = RunRecord & { stageResults: (StageResultRecord & { stageIndex: number })[] };
 
@@ -36,6 +37,17 @@ export function courseHue(slug: string): number {
   let h = 7;
   for (const ch of slug) h = (h * 31 + ch.charCodeAt(0)) % 3607;
   return TEMPER_HUES[h % TEMPER_HUES.length];
+}
+
+/** A course's tile: its icon (a product logo, or a generic icon for what it builds), else its first letter. */
+export function courseMarkHtml(slug: string, extra = ""): string {
+  const icon = COURSE_ICONS[slug];
+  const inner = !icon
+    ? esc(slug.charAt(0).toUpperCase())
+    : "fill" in icon
+      ? `<svg viewBox="0 0 24 24" fill="currentColor">${icon.fill}</svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon.stroke}</svg>`;
+  return `<span class="course-mark${extra}" aria-hidden="true">${inner}</span>`;
 }
 
 const ANVIL_LOGO = `<svg class="logo" viewBox="0 0 32 20" aria-hidden="true"><path d="M0 3.5 7 2h23v4.5h-5c-2.5.5-3.5 2-3.5 4V12l3.5 2.5V17H9v-2.5l3.5-2.5v-1.5c0-2-1.5-3.5-4.5-4C5 6 2 5 0 3.5Z"/></svg>`;
@@ -136,7 +148,7 @@ export function repoCardsHtml(repos: RepoListItem[]): string {
   return `<div class="card-grid">${repos
     .map(
       (r) => `<a class="card repo-card" href="/r/${esc(r.name)}" style="--hue:${courseHue(r.courseSlug)}">
-        <div class="card-head"><span class="course-mark" aria-hidden="true">${esc(r.courseSlug.charAt(0).toUpperCase())}</span><div><strong>${esc(
+        <div class="card-head">${courseMarkHtml(r.courseSlug)}<div><strong>${esc(
           r.name,
         )}</strong><span class="muted">${esc(r.courseName)}</span></div><span class="chip">${esc(r.language)}</span></div>
         <div class="progress-row">${progressHtml(r.passedCount, r.stageCount)}<span class="muted">${r.passedCount} / ${r.stageCount}</span></div>
@@ -159,7 +171,7 @@ export function coursesHtml(catalog: Catalog): string {
       const meta = [c.difficulty, `${c.stages.length} stages`].filter(Boolean).join(" · ");
       return `<a class="course-card" href="/courses/${esc(c.slug)}" style="--hue:${courseHue(c.slug)}" data-search="${esc(
         `${c.name} ${c.slug}`.toLowerCase(),
-      )}"><div class="card-head"><span class="course-mark" aria-hidden="true">${esc(c.slug.charAt(0).toUpperCase())}</span><strong>${esc(
+      )}"><div class="card-head">${courseMarkHtml(c.slug)}<strong>${esc(
         c.name,
       )}${badge}</strong></div>${marked.parse(c.shortDescriptionMd, { async: false })}<span class="meta">${esc(meta)}</span></a>`;
     })

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type RunDetail, TEMPER_HUES, activityHtml, advanceOf, calendarHtml, dayKey, diffHtml, formatDuration, relativeTime, runRowHtml,
   stageSummaryText, statsHtml, streak, apiErrorMessage, faviconHref, followRun, keyAction, liveLineText, liveLogHtml,
-  hintButtonLabel, hintHtml, notificationText, pageTitle, splitHintOutput, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
+  hintButtonLabel, hintHtml, notificationText, pageTitle, splitHintOutput, shortcutsHtml, titlePrefix, toastHtml, footerHtml, sparksHtml, courseHue, courseMarkHtml, coursesHtml, flyoutHtml, lockedHtml, navHtml, progressHtml, repoCardsHtml, setupHtml, stripText,
 } from "../web/render";
 import type { RunSummary } from "../src/api";
 import type { RunStatus } from "../src/store";
@@ -144,6 +144,8 @@ describe("coursesHtml", () => {
     expect(html).toContain("Build your own &lt;redis&gt;");
     expect(html).toContain("<strong>things</strong>");
     expect(html).toContain("medium · 2 stages");
+    expect(html).toContain(courseMarkHtml("redis"));
+    expect(html).toContain(courseMarkHtml("claude-code"));
     expect(html).toContain('<span class="badge">Beta</span>');
     expect(html.match(/class="badge"/g)?.length).toBe(1);
     expect(html).not.toContain("offline");
@@ -197,6 +199,36 @@ describe("courseHue", () => {
   });
 });
 
+describe("courseMarkHtml", () => {
+  const KNOWN = ["redis", "git", "sqlite", "docker", "kafka", "claude-code", "bittorrent", "shell", "http-server", "dns-server",
+    "interpreter", "grep"];
+
+  test("each CodeCrafters course gets its own icon", () => {
+    const icons = KNOWN.map((slug) => courseMarkHtml(slug));
+    for (const html of icons) {
+      expect(html).toContain('class="course-mark"');
+      expect(html).toContain("<svg");
+    }
+    expect(new Set(icons).size).toBe(KNOWN.length);
+  });
+
+  test("brand logos are filled, generic icons are drawn with strokes", () => {
+    expect(courseMarkHtml("redis")).toContain('fill="currentColor"');
+    expect(courseMarkHtml("shell")).toContain('stroke="currentColor"');
+  });
+
+  test("a course without an icon shows its first letter", () => {
+    const html = courseMarkHtml("my-course");
+    expect(html).toContain(">M</span>");
+    expect(html).not.toContain("<svg");
+  });
+
+  test("is hidden from screen readers and takes an extra class", () => {
+    expect(courseMarkHtml("redis", " big")).toContain('class="course-mark big" aria-hidden="true"');
+    expect(courseMarkHtml("<x>")).toContain("&lt;");
+  });
+});
+
 describe("repoCardsHtml", () => {
   const repo = {
     name: "redis-rust", courseSlug: "redis", courseName: "Build your own <Redis>", language: "rust",
@@ -211,6 +243,7 @@ describe("repoCardsHtml", () => {
     expect(html).toContain("6 / 124");
     expect(html).toContain("Stage 7: Expiry");
     expect(html).toContain(`--hue:${courseHue("redis")}`);
+    expect(html).toContain(courseMarkHtml("redis"));
   });
 
   test("a finished repo says so", () => {
